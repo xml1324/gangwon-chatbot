@@ -273,13 +273,14 @@ def generate_itinerary_text(package):
     
     for day_info in package['itinerary']:
         text += f"\n### Day {day_info['day']}\n\n"
-        for activity in day_info['activities']:
-            text += f"- **{activity['time']}**: {activity['activity']}\n"
-            if 'details' in activity:
-                text += f"  *{activity['details']}*\n"
+        # 'activities' 대신 'schedule'을 사용하고, 내부 키들도 수정합니다.
+        for item in day_info['schedule']:
+            cost_text = f"{item['cost']:,}원" if item['cost'] > 0 else "무료"
+            notes_text = f" ({item['notes']})" if item['notes'] else ""
+            text += f"- **{item['time']}** | {item['activity']} - {cost_text}{notes_text}\n"
     
-    text += "\n---\n"
-    text += f"**포함 사항**: {', '.join(package['included'])}\n"
+    # 구분선 스타일도 통일합니다.
+    text += f"\n\n**포함 사항**: {', '.join(package['included'])}\n"
     text += f"**불포함 사항**: {', '.join(package['excluded'])}\n"
     
     return text
