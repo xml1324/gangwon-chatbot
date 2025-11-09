@@ -39,9 +39,10 @@ def get_api_key():
             return api_key
         return None
 
-# 커스텀 CSS
+# 커스텀 CSS - Streamlit 기본 기능 활용 (Community Cloud 최적화)
 st.markdown("""
 <style>
+/* 기본 스타일 */
 .stButton>button {
     width: 100%;
 }
@@ -73,131 +74,52 @@ st.markdown("""
     border-left: 4px solid #667eea;
 }
 
-/* ==================== 채팅 UI 개선 ==================== */
-
-/* 채팅 입력창 하단 고정 */
-section[data-testid="stBottom"] > div,
-.stChatFloatingInputContainer,
-.stChatInputContainer {
-    position: fixed !important;
-    bottom: 0 !important;
-    left: 0 !important;
-    right: 0 !important;
-    background-color: white !important;
-    border-top: 1px solid #e6e6e6 !important;
-    padding: 1rem !important;
-    z-index: 9999 !important;
-    box-shadow: 0 -2px 10px rgba(0,0,0,0.1) !important;
-    margin: 0 !important;
-}
-
-/* 다크모드 - 채팅 입력창 */
-[data-theme="dark"] section[data-testid="stBottom"] > div,
-[data-theme="dark"] .stChatFloatingInputContainer,
-[data-theme="dark"] .stChatInputContainer {
-    background-color: #0e1117 !important;
-    border-top: 1px solid #31333F !important;
-}
-
-/* 다크모드 - 기타 요소 */
-[data-theme="dark"] .price-box {
-    background-color: #1e2130 !important;
-    color: #fafafa !important;
-}
-
-[data-theme="dark"] .recommendation-card {
-    background-color: #1e2130 !important;
-    border-color: #31333F !important;
-    color: #fafafa !important;
-}
-
-/* 메인 컨텐츠 하단 여백 (입력창 공간 확보) */
-.main .block-container,
-section.main > div {
-    padding-bottom: 120px !important;
-}
-
-/* 입력창 여러 줄 지원 및 스타일 개선 */
-section[data-testid="stBottom"] textarea,
-.stChatInputContainer textarea {
-    min-height: 50px !important;
-    max-height: 200px !important;
-    resize: vertical !important;
-    font-size: 16px !important;
-    line-height: 1.5 !important;
-    border-radius: 20px !important;
-}
-
-/* 입력창 포커스 시 스타일 */
-section[data-testid="stBottom"] textarea:focus,
-.stChatInputContainer textarea:focus {
-    border-color: #667eea !important;
-    box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2) !important;
-    outline: none !important;
-}
-
-/* 채팅 메시지 영역 스크롤 */
-[data-testid="stVerticalBlock"] > [style*="flex-direction: column;"] {
-    max-height: calc(100vh - 300px);
-    overflow-y: auto;
-    scroll-behavior: smooth;
+/* 다크모드 지원 (prefers-color-scheme 사용) */
+@media (prefers-color-scheme: dark) {
+    .price-box {
+        background-color: #1e2130 !important;
+        color: #fafafa !important;
+    }
+    .recommendation-card {
+        background-color: #1e2130 !important;
+        border-color: #31333F !important;
+        color: #fafafa !important;
+    }
 }
 
 /* 스크롤바 스타일 */
 ::-webkit-scrollbar {
     width: 8px;
 }
-
 ::-webkit-scrollbar-track {
     background: #f1f1f1;
-    border-radius: 10px;
+    border-radius: 4px;
 }
-
 ::-webkit-scrollbar-thumb {
     background: #888;
-    border-radius: 10px;
+    border-radius: 4px;
 }
-
 ::-webkit-scrollbar-thumb:hover {
     background: #555;
 }
 
 /* 다크모드 스크롤바 */
-[data-theme="dark"] ::-webkit-scrollbar-track {
-    background: #1e2130;
-}
-
-[data-theme="dark"] ::-webkit-scrollbar-thumb {
-    background: #4a4a4a;
-}
-
-[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
-    background: #666;
-}
-
-/* 채팅 메시지 fade-in 애니메이션 */
-.stChatMessage {
-    animation: fadeIn 0.3s ease-in;
-}
-
-@keyframes fadeIn {
-    from {
-        opacity: 0;
-        transform: translateY(10px);
+@media (prefers-color-scheme: dark) {
+    ::-webkit-scrollbar-track {
+        background: #1e2130;
     }
-    to {
-        opacity: 1;
-        transform: translateY(0);
+    ::-webkit-scrollbar-thumb {
+        background: #4a4a4a;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+        background: #666;
     }
 }
 
-/* 부드러운 스크롤 애니메이션 */
-@keyframes smoothScroll {
-    from {
-        scroll-behavior: smooth;
-    }
-    to {
-        scroll-behavior: smooth;
+/* 채팅 입력창은 Streamlit 기본 동작 사용 (v1.29+) */
+/* 추가 CSS 없이도 하단 고정됩니다 */
+</style>
+""", unsafe_allow_html=True)
     }
 }
 </style>
@@ -294,7 +216,7 @@ with st.sidebar:
     # 모델 설정
     model_choice = st.selectbox(
         "AI 모델",
-        ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"],
+        ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"],
         index=0,
         help="gpt-4o-mini 권장 (속도와 비용 최적화)"
     )
@@ -307,20 +229,17 @@ with st.sidebar:
     
     st.divider()
 
-    st.subheader("💬 채팅 UI")
+    st.subheader("💬 채팅 설정")
     
-    # 1. 수동 다크 모드 토글
-    dark_mode = st.toggle("🌙 다크 모드", value=False, key="dark_mode",
-                         help="수동으로 다크/라이트 모드를 전환합니다.")
+    st.info("""
+    **🎨 다크모드 사용법**
     
-    # 2. 자동 스크롤
-    auto_scroll = st.checkbox("자동 스크롤", value=True, help="새 메시지 생성 시 자동으로 하단 스크롤")
+    화면 우측 상단 **⋮ 메뉴** → **Settings** → **Theme**에서 변경
+    - Light (라이트 모드)
+    - Dark (다크 모드)
+    """)
     
-    if "auto_scroll" not in st.session_state:
-        st.session_state.auto_scroll = True
-    st.session_state.auto_scroll = auto_scroll
-    
-    st.caption("💡 Shift+Enter로 여러 줄 입력 가능")
+    st.caption("💡 **팁**: Shift+Enter로 여러 줄 입력 가능")
     
     st.divider()
     
@@ -663,35 +582,22 @@ with tab1:
             st.session_state.quick_query = "춘천 1박 2일 여행 일정 짜줘. 가격도 함께 알려줘"
     
     # 대화 내역
-    chat_container = st.container()
-    with chat_container:
-        for message in st.session_state.messages:
-            with st.chat_message(message["role"]):
-                st.markdown(message["content"])
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
 
-    # 자동 스크롤 스크립트 (사이드바 체크박스 연동)
-    if st.session_state.get("auto_scroll", True) and len(st.session_state.messages) > 0:
-        st.markdown("""
-        <script>
-        setTimeout(function() {
-            window.scrollTo(0, document.body.scrollHeight);
-        }, 100);
-        </script>
-        """, unsafe_allow_html=True)
-
-    # 1. st.chat_input을 항상 렌더링 (안내 문구 수정)
-    chat_prompt = st.chat_input("💭 메시지를 입력하세요 (Shift+Enter로 줄바꿈)")
+    # 채팅 입력 (Streamlit 1.29+는 자동으로 하단 고정됨)
+    chat_prompt = st.chat_input("💭 메시지를 입력하세요 (Shift+Enter로 여러 줄)")
     
-    # 2. 버튼 클릭(빠른 질문)을 별도로 처리합니다.
+    # 빠른 질문 버튼 처리
     button_prompt = None
     if hasattr(st.session_state, 'quick_query'):
         button_prompt = st.session_state.quick_query
-        del st.session_state.quick_query # 처리 후 즉시 삭제
+        del st.session_state.quick_query
 
-    # 3. 버튼 입력(button_prompt) 또는 채팅 입력(chat_prompt) 중 하나를 실제 프롬프트로 사용합니다.
+    # 버튼 입력 또는 채팅 입력 사용
     prompt = button_prompt or chat_prompt
 
-    # [참고] app (6).py의 RAG + 스트리밍 로직은 그대로 유지
     if prompt:
         if not API_KEY:
             st.error("⚠️ API 키가 설정되지 않았습니다. 사이드바를 확인해주세요.")
