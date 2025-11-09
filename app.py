@@ -392,7 +392,7 @@ def create_workflow(api_key, model_name, temp, filters):
         context = state.get("context", "")
         messages = state["messages"]
         
-        system_prompt = f"""당신은 강원도 관광 및 숙박 전문 AI 컨시어지입니다.
+        system_prompt = """당신은 강원도 관광 및 숙박 전문 AI 컨시어지입니다.
 
 **설문 결과 반영 - 반드시 포함해야 할 정보:**
 1. 가격 정보 (가장 중요!)
@@ -425,7 +425,7 @@ def create_workflow(api_key, model_name, temp, filters):
         ])
         
         chain = prompt | llm
-        response = chain.invoke({"messages": messages})
+        response = chain.invoke({"context": context, "messages": messages})
         
         return {
             "response": response.content,
@@ -570,7 +570,7 @@ with tab1:
                         context = "\n\n".join([doc.page_content for doc in docs])
 
                         # 4. 프롬프트 생성
-                        system_prompt = f"""당신은 강원도 관광 및 숙박 전문 AI 컨시어지입니다.
+                        system_prompt = """당신은 강원도 관광 및 숙박 전문 AI 컨시어지입니다.
 
 **설문 결과 반영 - 반드시 포함해야 할 정보:**
 1. 가격 정보 (가장 중요!)
@@ -613,7 +613,7 @@ with tab1:
                                 chat_history.append(AIMessage(content=msg["content"]))
 
                         # 6. 🚀 st.write_stream을 사용하여 스트리밍 실행 (스피너는 여기서 사라짐)
-                        response_stream = chain.stream({"messages": chat_history})
+                        response_stream = chain.stream({"context": context, "messages": chat_history})
                         full_response = st.write_stream(response_stream)
                         
                         # 7. 스트리밍 완료 후 전체 응답을 세션 상태에 저장
