@@ -39,51 +39,39 @@ def get_api_key():
             return api_key
         return None
 
-# 커스텀 CSS - Streamlit 기본 기능 활용 (Community Cloud 최적화)
+# 커스텀 CSS
 st.markdown("""
 <style>
-    /* * Streamlit Community Cloud (v1.33+ 대응)
-     * 채팅 입력창 하단 고정 CSS
-     */
-
-    /* 채팅 입력창을 감싸는 컨테이너 */
-    section[data-testid="stBottom"] {
-        position: fixed !important; /* 화면 하단에 고정 */
-        bottom: 0 !important;       /* 하단 0px에 위치 */
-        left: 0 !important;        /* 왼쪽 0px에 위치 */
-        right: 0 !important;       /* 오른쪽 0px에 위치 */
-        width: 100% !important;    /* 너비 100% */
-        z-index: 9999 !important;  /* 다른 요소들 위에 오도록 z-index 설정 */
-        
-        /* 라이트 모드 기본 스타일 */
-        background-color: white !important;
-        border-top: 1px solid #e6e6e6 !important;
-        box-shadow: 0 -2px 10px rgba(0,0,0,0.1) !important;
-        padding: 1rem !important;
-        margin: 0 !important;
-    }
-
-    /* 다크 모드일 때 채팅 입력창 스타일 */
-    [data-theme="dark"] section[data-testid="stBottom"] {
-        background-color: #0e1117 !important; /* 다크 모드 배경색 */
-        border-top: 1px solid #31333F !important; /* 다크 모드 경계선 */
-    }
-
-    /* * [중요] 메인 컨텐츠 영역에 하단 여백(padding) 추가
-     * 고정된 채팅창이 마지막 메시지를 가리지 않도록 공간 확보
-     */
-    .main .block-container,
-    section.main > div {
-        /* 하단 여백을 입력창의 높이(약 100px~120px)만큼 확보 */
-        padding-bottom: 120px !important; 
-    }
-
-    /* 입력창 내부 textarea 스타일 (선택적) */
-    section[data-testid="stBottom"] textarea {
-        min-height: 50px !important;
-        max-height: 200px !important;
-        border-radius: 20px !important;
-    }
+.stButton>button {
+    width: 100%;
+}
+.price-box {
+    background-color: #f0f2f6;
+    padding: 20px;
+    border-radius: 10px;
+    margin: 10px 0;
+}
+.recommendation-card {
+    border: 1px solid #ddd;
+    padding: 15px;
+    border-radius: 8px;
+    margin: 10px 0;
+    background-color: white;
+}
+.info-banner {
+    background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 20px;
+    border-radius: 10px;
+    margin-bottom: 20px;
+    text-align: center;
+}
+.metric-card {
+    background-color: #f8f9fa;
+    padding: 15px;
+    border-radius: 8px;
+    border-left: 4px solid #667eea;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -145,7 +133,7 @@ with st.sidebar:
     # 모델 설정
     model_choice = st.selectbox(
         "AI 모델",
-        ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"],
+        ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"],
         index=0,
         help="gpt-4o-mini 권장 (속도와 비용 최적화)"
     )
@@ -155,20 +143,6 @@ with st.sidebar:
         0.0, 1.0, 0.7, 0.1,
         help="낮을수록 일관적, 높을수록 창의적"
     )
-    
-    st.divider()
-
-    st.subheader("💬 채팅 설정")
-    
-    st.info("""
-    **🎨 다크모드 사용법**
-    
-    화면 우측 상단 **⋮ 메뉴** → **Settings** → **Theme**에서 변경
-    - Light (라이트 모드)
-    - Dark (다크 모드)
-    """)
-    
-    st.caption("💡 **팁**: Shift+Enter로 여러 줄 입력 가능")
     
     st.divider()
     
@@ -219,7 +193,7 @@ with st.sidebar:
     st.divider()
     st.caption("강원대학교 강원지능화혁신센터")
 
-# 헬퍼 함수들 (app (6).py의 안정적인 .get() 및 try/except 로직 유지)
+# 헬퍼 함수들
 def filter_accommodations(filters):
     """필터 조건에 맞는 숙소 검색"""
     results = []
@@ -311,8 +285,6 @@ def generate_itinerary_text(package):
     
     return text
 
-# [참고] create_workflow 함수는 app (6).py에 정의되어 있으나
-# 실제로는 사용되지 않고 있음 (그대로 둠)
 def create_workflow(api_key, model_name, temp, filters):
     """LangGraph 워크플로우 생성 - proxies 오류 수정 버전"""
     
@@ -469,23 +441,6 @@ def create_workflow(api_key, model_name, temp, filters):
     
     return workflow.compile()
 
-# 수동 다크 모드 적용 스크립트
-if st.session_state.get("dark_mode", False):
-    st.markdown("""
-    <script>
-    // <html> 태그에 data-theme="dark" 속성을 강제로 추가합니다.
-    // 이렇게 하면 CSS의 [data-theme="dark"] 선택자가 작동합니다.
-    document.documentElement.setAttribute('data-theme', 'dark');
-    </script>
-    """, unsafe_allow_html=True)
-else:
-    st.markdown("""
-    <script>
-    // 다크 모드가 꺼지면 <html> 태그에서 속성을 제거합니다.
-    document.documentElement.removeAttribute('data-theme');
-    </script>
-    """, unsafe_allow_html=True)
-
 # 메인 UI - 탭 구성
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "💬 AI 상담", 
@@ -514,18 +469,22 @@ with tab1:
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
-
-    # 채팅 입력 (Streamlit 1.29+는 자동으로 하단 고정됨)
-    chat_prompt = st.chat_input("💭 메시지를 입력하세요 (Shift+Enter로 여러 줄)")
     
-    # 빠른 질문 버튼 처리
+    # ----------------- ⬇️ 로직 수정 ⬇️ -----------------
+
+    # 1. st.chat_input을 항상 렌더링하여 화면 하단에 고정시킵니다.
+    chat_prompt = st.chat_input("예: '춘천에서 1박 2일 가족 여행 가격 얼마나 들어? 숙소도 추천해줘'")
+    
+    # 2. 버튼 클릭(빠른 질문)을 별도로 처리합니다.
     button_prompt = None
     if hasattr(st.session_state, 'quick_query'):
         button_prompt = st.session_state.quick_query
-        del st.session_state.quick_query
+        del st.session_state.quick_query # 처리 후 즉시 삭제
 
-    # 버튼 입력 또는 채팅 입력 사용
+    # 3. 버튼 입력(button_prompt) 또는 채팅 입력(chat_prompt) 중 하나를 실제 프롬프트로 사용합니다.
     prompt = button_prompt or chat_prompt
+
+    # ----------------- ⬆️ 로직 수정 ⬆️ -----------------
 
     if prompt:
         if not API_KEY:
@@ -541,7 +500,7 @@ with tab1:
                 # RAG 검색 및 컨텍스트 생성 중 스피너 표시
                 with st.spinner("💭 관련 정보를 검색 중..."):
                     try:
-                        # (이하 스트리밍/RAG 로직은 기존 app (6).py와 동일)
+                        # (이전 답변의 스트리밍 로직과 동일)
                         
                         # 1. LLM 및 임베딩 초기화
                         os.environ["OPENAI_API_KEY"] = API_KEY
@@ -653,17 +612,12 @@ with tab1:
                             else:
                                 chat_history.append(AIMessage(content=msg["content"]))
 
-                        # 6. 🚀 st.write_stream을 사용하여 스트리밍 실행 (핵심 기능 유지)
+                        # 6. 🚀 st.write_stream을 사용하여 스트리밍 실행 (스피너는 여기서 사라짐)
                         response_stream = chain.stream({"messages": chat_history})
                         full_response = st.write_stream(response_stream)
                         
                         # 7. 스트리밍 완료 후 전체 응답을 세션 상태에 저장
                         st.session_state.messages.append({"role": "assistant", "content": full_response})
-                        
-                        # 8. (중요) 세션 상태가 변경되었으므로, Streamlit은 이 블록 실행이
-                        # 끝난 직후 앱을 '다시 실행(re-run)'합니다. 
-                        # 이때 위에서 삽입한 스크롤 스크립트가 실행되어
-                        # 화면을 맨 아래로 내리게 됩니다.
                         
                     except Exception as e:
                         st.error(f"❌ 오류: {str(e)}")
@@ -734,7 +688,6 @@ with tab3:
         
         st.success("✅ 일정표가 생성되었습니다!")
 
-# [참고] app (6).py의 안정적인 try/except 로직 유지
 with tab4:
     st.subheader("🏨 숙소 실시간 검색")
     st.info("💡 **설문 결과**: 가격, 위치, 객실 타입, 식사 정보가 필수입니다!")
@@ -777,7 +730,6 @@ with tab4:
         except Exception as e:
             st.error(f"숙소 정보 표시 오류: {str(e)}")
 
-# [참고] app (6).py의 안정적인 try/except 로직 유지
 with tab5:
     st.subheader("📊 숙소 가격 비교")
     st.info("💡 **설문 결과**: 신뢰를 위해 가격 비교 정보가 중요합니다!")
