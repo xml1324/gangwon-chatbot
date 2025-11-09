@@ -318,7 +318,7 @@ def initialize_vector_store(_api_key):
 def create_workflow(api_key, model_name, temp, filters):
     """고도화된 LangGraph 워크플로우 생성"""
     
-    llm = ChatOpenAI(model=model_name, temperature=temp, openai_api_key=api_key)
+    llm = ChatOpenAI(model=model_name, temperature=temp, api_key=api_key)
     vector_store = initialize_vector_store(api_key)
     
     def retrieve_context(state: AgentState):
