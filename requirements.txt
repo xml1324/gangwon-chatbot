@@ -1,17 +1,8 @@
-#streamlit==1.31.0
-#langchain==0.1.20
-#langchain-openai>=0.1.1  # 0.1.0 -> 0.1.1 이상으로 변경
-#langchain-community==0.0.38
-#langgraph==0.0.40
-#chromadb==0.4.24
-#openai==1.13.3
-#tiktoken                # ==0.6.0 삭제 (최신 버전 사용)
-
-streamlit
-langchain
-langchain-openai
-langchain-community
-langgraph
-chromadb
-openai
+streamlit==1.31.0
+langchain==0.1.20
+langchain-openai>=0.1.1
+langchain-community==0.0.38
+langgraph==0.0.40
+chromadb==0.4.24
+openai==1.13.3
 tiktoken
