@@ -309,14 +309,11 @@ with st.sidebar:
 
     st.subheader("💬 채팅 UI")
     
-    st.info("""
-    **💡 다크모드 전환**
+    # 1. 수동 다크 모드 토글
+    dark_mode = st.toggle("🌙 다크 모드", value=False, key="dark_mode",
+                         help="수동으로 다크/라이트 모드를 전환합니다.")
     
-    화면 우측 상단 ⋮ 메뉴 → Settings → Theme
-    - Light (라이트 모드)
-    - Dark (다크 모드)
-    """)
-    
+    # 2. 자동 스크롤
     auto_scroll = st.checkbox("자동 스크롤", value=True, help="새 메시지 생성 시 자동으로 하단 스크롤")
     
     if "auto_scroll" not in st.session_state:
@@ -623,6 +620,23 @@ def create_workflow(api_key, model_name, temp, filters):
     workflow.add_edge("generate", END)
     
     return workflow.compile()
+
+# 수동 다크 모드 적용 스크립트
+if st.session_state.get("dark_mode", False):
+    st.markdown("""
+    <script>
+    // <html> 태그에 data-theme="dark" 속성을 강제로 추가합니다.
+    // 이렇게 하면 CSS의 [data-theme="dark"] 선택자가 작동합니다.
+    document.documentElement.setAttribute('data-theme', 'dark');
+    </script>
+    """, unsafe_allow_html=True)
+else:
+    st.markdown("""
+    <script>
+    // 다크 모드가 꺼지면 <html> 태그에서 속성을 제거합니다.
+    document.documentElement.removeAttribute('data-theme');
+    </script>
+    """, unsafe_allow_html=True)
 
 # 메인 UI - 탭 구성
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
