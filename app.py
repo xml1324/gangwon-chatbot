@@ -42,82 +42,48 @@ def get_api_key():
 # 커스텀 CSS - Streamlit 기본 기능 활용 (Community Cloud 최적화)
 st.markdown("""
 <style>
-/* 기본 스타일 */
-.stButton>button {
-    width: 100%;
-}
-.price-box {
-    background-color: #f0f2f6;
-    padding: 20px;
-    border-radius: 10px;
-    margin: 10px 0;
-}
-.recommendation-card {
-    border: 1px solid #ddd;
-    padding: 15px;
-    border-radius: 8px;
-    margin: 10px 0;
-    background-color: white;
-}
-.info-banner {
-    background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    padding: 20px;
-    border-radius: 10px;
-    margin-bottom: 20px;
-    text-align: center;
-}
-.metric-card {
-    background-color: #f8f9fa;
-    padding: 15px;
-    border-radius: 8px;
-    border-left: 4px solid #667eea;
-}
+    /* * Streamlit Community Cloud (v1.33+ 대응)
+     * 채팅 입력창 하단 고정 CSS
+     */
 
-/* 다크모드 지원 (prefers-color-scheme 사용) */
-@media (prefers-color-scheme: dark) {
-    .price-box {
-        background-color: #1e2130 !important;
-        color: #fafafa !important;
+    /* 채팅 입력창을 감싸는 컨테이너 */
+    section[data-testid="stBottom"] {
+        position: fixed !important; /* 화면 하단에 고정 */
+        bottom: 0 !important;       /* 하단 0px에 위치 */
+        left: 0 !important;        /* 왼쪽 0px에 위치 */
+        right: 0 !important;       /* 오른쪽 0px에 위치 */
+        width: 100% !important;    /* 너비 100% */
+        z-index: 9999 !important;  /* 다른 요소들 위에 오도록 z-index 설정 */
+        
+        /* 라이트 모드 기본 스타일 */
+        background-color: white !important;
+        border-top: 1px solid #e6e6e6 !important;
+        box-shadow: 0 -2px 10px rgba(0,0,0,0.1) !important;
+        padding: 1rem !important;
+        margin: 0 !important;
     }
-    .recommendation-card {
-        background-color: #1e2130 !important;
-        border-color: #31333F !important;
-        color: #fafafa !important;
-    }
-}
 
-/* 스크롤바 스타일 */
-::-webkit-scrollbar {
-    width: 8px;
-}
-::-webkit-scrollbar-track {
-    background: #f1f1f1;
-    border-radius: 4px;
-}
-::-webkit-scrollbar-thumb {
-    background: #888;
-    border-radius: 4px;
-}
-::-webkit-scrollbar-thumb:hover {
-    background: #555;
-}
+    /* 다크 모드일 때 채팅 입력창 스타일 */
+    [data-theme="dark"] section[data-testid="stBottom"] {
+        background-color: #0e1117 !important; /* 다크 모드 배경색 */
+        border-top: 1px solid #31333F !important; /* 다크 모드 경계선 */
+    }
 
-/* 다크모드 스크롤바 */
-@media (prefers-color-scheme: dark) {
-    ::-webkit-scrollbar-track {
-        background: #1e2130;
+    /* * [중요] 메인 컨텐츠 영역에 하단 여백(padding) 추가
+     * 고정된 채팅창이 마지막 메시지를 가리지 않도록 공간 확보
+     */
+    .main .block-container,
+    section.main > div {
+        /* 하단 여백을 입력창의 높이(약 100px~120px)만큼 확보 */
+        padding-bottom: 120px !important; 
     }
-    ::-webkit-scrollbar-thumb {
-        background: #4a4a4a;
-    }
-    ::-webkit-scrollbar-thumb:hover {
-        background: #666;
-    }
-}
 
-/* 채팅 입력창은 Streamlit 기본 동작 사용 (v1.29+) */
-/* 추가 CSS 없이도 하단 고정됩니다 */
+    /* 입력창 내부 textarea 스타일 (선택적) */
+    section[data-testid="stBottom"] textarea {
+        min-height: 50px !important;
+        max-height: 200px !important;
+        border-radius: 20px !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
