@@ -2,6 +2,7 @@ streamlit
 langchain
 langchain-openai>=0.2.5
 langchain-community
+langchain-text-splitters
 langgraph
 chromadb==0.4.24
 openai>=1.54.0
