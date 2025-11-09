@@ -261,66 +261,21 @@ def generate_itinerary_text(package):
     
     for day_info in package['itinerary']:
         text += f"\n### Day {day_info['day']}\n\n"
-        for item in day_info['schedule']:
-            cost_text = f"{item['cost']:,}원" if item['cost'] > 0 else "무료"
-            notes_text = f" ({item['notes']})" if item['notes'] else ""
-            text += f"- **{item['time']}** | {item['activity']} - {cost_text}{notes_text}\n"
+        for activity in day_info['activities']:
+            text += f"- **{activity['time']}**: {activity['activity']}\n"
+            if 'details' in activity:
+                text += f"  *{activity['details']}*\n"
     
-    text += f"\n\n**포함 사항**: {', '.join(package['included'])}\n"
+    text += "\n---\n"
+    text += f"**포함 사항**: {', '.join(package['included'])}\n"
     text += f"**불포함 사항**: {', '.join(package['excluded'])}\n"
     
     return text
 
-# 벡터 스토어 초기화
-@st.cache_resource
-def initialize_vector_store(_api_key):
-    """리뷰 및 모든 데이터를 벡터 스토어에 저장"""
-    if not _api_key:
-        return None
-    
-    texts = []
-    
-    # 리뷰 데이터
-    for review in SAMPLE_REVIEWS:
-        text = f"장소: {review['place_name']}, 카테고리: {review['category']}, 평점: {review['rating']}/5, 리뷰: {review['review_text']}"
-        texts.append(text)
-    
-    # 인터뷰 데이터
-    for interview in SAMPLE_INTERVIEWS:
-        text = f"질문: {interview['question']}, 응답: {interview['answer']}"
-        texts.append(text)
-    
-    # 숙소 데이터
-    for acc in ACCOMMODATION_DATA:
-        price_info = ", ".join([f"{k}: {v:,}원" for k, v in acc['price_per_night'].items()])
-        text = f"숙소: {acc['name']}, 위치: {acc['location']}, 가격: {price_info}, 평점: {acc['rating']}, 청결도: {acc['cleanliness_score']}, 시설: {', '.join(acc['facilities'])}"
-        texts.append(text)
-    
-    # 맛집 데이터
-    for rest in RESTAURANT_DATA:
-        text = f"맛집: {rest['name']}, 전문: {rest['specialty']}, 위치: {rest['location']}, 평균 가격: {rest['average_cost_per_person']:,}원, 평점: {rest['rating']}, 인기 메뉴: {', '.join(rest['popular_menu'])}"
-        texts.append(text)
-    
-    # 관광지 데이터
-    for attr in ATTRACTION_DATA:
-        text = f"관광지: {attr['name']}, 위치: {attr['location']}, 입장료: {attr['entrance_fee']['adult']}원, 평점: {attr['rating']}, 추천 계절: {', '.join(attr['best_season'])}"
-        texts.append(text)
-    
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-    splits = text_splitter.create_documents(texts)
-    
-    embeddings = OpenAIEmbeddings(api_key=_api_key)
-    vector_store = Chroma.from_documents(documents=splits, embedding=embeddings)
-    
-    return vector_store
-
-# LangGraph 워크플로우
 def create_workflow(api_key, model_name, temp, filters):
-    """고도화된 LangGraph 워크플로우 생성"""
+    """LangGraph 워크플로우 생성 - proxies 오류 수정 버전"""
     
-    # llm = ChatOpenAI(model=model_name, temperature=temp, api_key=api_key)
-
-        # 🔧 수정: 환경 변수로 API 키 설정
+    # 🔧 수정: 환경 변수로 API 키 설정
     os.environ["OPENAI_API_KEY"] = api_key
     
     # 🔧 수정: api_key 파라미터 제거
@@ -329,45 +284,79 @@ def create_workflow(api_key, model_name, temp, filters):
         temperature=temp
     )
     
-    vector_store = initialize_vector_store(api_key)
+    embeddings = OpenAIEmbeddings()
+    
+    # 컨텍스트 데이터 준비
+    all_docs = []
+    
+    # 숙소 데이터
+    filtered_accs = filter_accommodations(filters)
+    for acc in filtered_accs:
+        doc_text = f"""
+숙소명: {acc['name']}
+위치: {acc['location']}
+평점: {acc['rating']}
+청결도: {acc['cleanliness_score']}/5.0
+최근 예약: {acc['recent_bookings']}건
+
+가격 (1박):
+{chr(10).join([f'- {rt}: {p:,}원' for rt, p in acc['price_per_night'].items()])}
+
+조식: {'포함 (뷔페)' if acc['meals']['breakfast_included'] else f'별도 ({acc['meals']['breakfast_price']:,}원)'}
+
+시설: {', '.join(acc['facilities'])}
+
+주변 명소:
+{chr(10).join([f'- {place}: {dist}' for place, dist in acc['distance_to_attractions'].items()])}
+"""
+        all_docs.append(doc_text)
+    
+    # 맛집 데이터
+    for rest in RESTAURANT_DATA:
+        doc_text = f"""
+맛집: {rest['name']}
+위치: {rest['location']}
+평점: {rest['rating']}
+영업시간: {rest['hours']}
+가격대: {rest['price_range']}
+주차: {'가능' if rest['parking'] else '불가'}
+인기메뉴: {', '.join(rest['popular_dishes'])}
+분위기: {rest['atmosphere']}
+"""
+        all_docs.append(doc_text)
+    
+    # 관광지 데이터
+    for attr in ATTRACTION_DATA:
+        doc_text = f"""
+관광지: {attr['name']}
+위치: {attr['location']}
+평점: {attr['rating']}
+입장료: {attr['entry_fee']}
+운영시간: {attr['hours']}
+소요시간: {attr['time_needed']}
+계절추천: {', '.join(attr['best_seasons'])}
+"""
+        all_docs.append(doc_text)
+    
+    # 벡터스토어 생성
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=200
+    )
+    splits = text_splitter.create_documents(all_docs)
+    
+    vectorstore = Chroma.from_documents(
+        documents=splits,
+        embedding=embeddings
+    )
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
     
     def retrieve_context(state: AgentState):
         """컨텍스트 검색"""
         query = state["user_query"]
-        contexts = []
-        
-        if vector_store:
-            docs = vector_store.similarity_search(query, k=5)
-            contexts.extend([doc.page_content for doc in docs])
-        
-        filtered_accs = filter_accommodations(filters)
-        if filtered_accs:
-            for acc in filtered_accs[:3]:
-                price_info = ", ".join([f"{k}: {v:,}원" for k, v in acc['price_per_night'].items()])
-                contexts.append(
-                    f"[추천 숙소] {acc['name']} - {acc['location']}, 가격: {price_info}, "
-                    f"평점: {acc['rating']}, 최근 예약: {acc['recent_bookings']}건, "
-                    f"시설: {', '.join(acc['facilities'][:3])}"
-                )
-        
-        current_month = datetime.now().month
-        if 3 <= current_month <= 5:
-            season = "spring"
-        elif 6 <= current_month <= 8:
-            season = "summer"
-        elif 9 <= current_month <= 11:
-            season = "autumn"
-        else:
-            season = "winter"
-        
-        season_info = SEASONAL_RECOMMENDATIONS[season]
-        contexts.append(
-            f"[계절 추천] 현재는 {season}입니다. "
-            f"추천 명소: {', '.join(season_info['attractions'])}, "
-            f"날씨 팁: {season_info['weather_tip']}"
-        )
-        
-        return {"context": "\n\n".join(contexts)}
+        docs = retriever.get_relevant_documents(query)
+        context = "\n\n".join([doc.page_content for doc in docs])
+        return {"context": context}
     
     def generate_response(state: AgentState):
         """응답 생성"""
