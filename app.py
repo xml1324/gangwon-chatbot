@@ -275,15 +275,16 @@ def generate_itinerary_text(package):
 def create_workflow(api_key, model_name, temp, filters):
     """LangGraph 워크플로우 생성 - proxies 오류 수정 버전"""
     
-    # 🔧 수정: 환경 변수로 API 키 설정
+    # 🔧 수정: 환경 변수로 API 키 설정 (전역)
     os.environ["OPENAI_API_KEY"] = api_key
     
-    # 🔧 수정: api_key 파라미터 제거
+    # 🔧 수정: 파라미터 없이 초기화 (환경 변수 자동 사용)
     llm = ChatOpenAI(
-        model=model_name,
+        model_name=model_name,
         temperature=temp
     )
     
+    # 🔧 수정: OpenAIEmbeddings도 파라미터 최소화
     embeddings = OpenAIEmbeddings()
     
     # 컨텍스트 데이터 준비
