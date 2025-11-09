@@ -72,7 +72,157 @@ st.markdown("""
     border-radius: 8px;
     border-left: 4px solid #667eea;
 }
+
+/* 채팅 입력창 하단 고정 */
+.stChatFloatingInputContainer {
+    position: fixed !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    background-color: white !important;
+    border-top: 1px solid #e6e6e6 !important;
+    padding: 1rem !important;
+    z-index: 999 !important;
+    box-shadow: 0 -2px 10px rgba(0,0,0,0.1) !important;
+}
+
+/* 다크모드 지원 */
+[data-theme="dark"] .stChatFloatingInputContainer {
+    background-color: #0e1117 !important;
+    border-top: 1px solid #31333F !important;
+}
+
+[data-theme="dark"] .price-box {
+    background-color: #1e2130 !important;
+    color: #fafafa !important;
+}
+
+[data-theme="dark"] .recommendation-card {
+    background-color: #1e2130 !important;
+    border-color: #31333F !important;
+    color: #fafafa !important;
+}
+
+/* 채팅 메시지 영역에 하단 여백 추가 (입력창 공간 확보) */
+.main .block-container {
+    padding-bottom: 120px !important;
+}
+
+/* 채팅 입력창 스타일 개선 - 여러 줄 입력 지원 */
+.stChatInputContainer > div {
+    border-radius: 20px !important;
+}
+
+.stChatInputContainer textarea {
+    min-height: 50px !important;
+    max-height: 200px !important;
+    resize: vertical !important;
+    font-size: 16px !important;
+    line-height: 1.5 !important;
+}
+
+/* 채팅 메시지 영역 스크롤 */
+[data-testid="stVerticalBlock"] > [style*="flex-direction: column;"] {
+    max-height: calc(100vh - 300px);
+    overflow-y: auto;
+    scroll-behavior: smooth;
+}
+
+/* 스크롤바 스타일 */
+::-webkit-scrollbar {
+    width: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #888;
+    border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #555;
+}
+
+/* 다크모드 스크롤바 */
+[data-theme="dark"] ::-webkit-scrollbar-track {
+    background: #1e2130;
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb {
+    background: #4a4a4a;
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+    background: #666;
+}
+
+/* 자동 스크롤 애니메이션 */
+@keyframes smoothScroll {
+    from {
+        scroll-behavior: smooth;
+    }
+    to {
+        scroll-behavior: smooth;
+    }
+}
+
+/* 채팅 메시지 fade-in 애니메이션 */
+.stChatMessage {
+    animation: fadeIn 0.3s ease-in;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* 입력창 포커스 시 스타일 */
+.stChatInputContainer textarea:focus {
+    border-color: #667eea !important;
+    box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2) !important;
+}
 </style>
+
+<script>
+// 자동 스크롤 스크립트
+function scrollToBottom() {
+    const chatContainer = document.querySelector('[data-testid="stVerticalBlock"]');
+    if (chatContainer) {
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+}
+
+// 새 메시지 감지 및 자동 스크롤
+const observer = new MutationObserver(function(mutations) {
+    mutations.forEach(function(mutation) {
+        if (mutation.addedNodes.length) {
+            setTimeout(scrollToBottom, 100);
+        }
+    });
+});
+
+// DOM 로드 후 observer 시작
+window.addEventListener('load', function() {
+    const chatContainer = document.querySelector('[data-testid="stVerticalBlock"]');
+    if (chatContainer) {
+        observer.observe(chatContainer, {
+            childList: true,
+            subtree: true
+        });
+        scrollToBottom();
+    }
+});
+</script>
 """, unsafe_allow_html=True)
 
 # 상태 정의
