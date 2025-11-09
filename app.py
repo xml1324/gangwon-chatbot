@@ -191,7 +191,7 @@ with st.sidebar:
         st.metric("패키지", f"{len(PACKAGE_TEMPLATES)}개")
     
     st.divider()
-    st.caption("강원대학교 강원지능화혁신센터")
+    st.caption("강원대학교 학생창의자율과제 7팀")
 
 # 헬퍼 함수들
 def filter_accommodations(filters):
@@ -787,6 +787,6 @@ st.markdown("""
 <div style='text-align: center; padding: 20px; background-color: #f8f9fa; border-radius: 10px;'>
     <h4>🎯 설문 기반 고도화 기능</h4>
     <p>✅ 가격 정보 우선 제공 | ✅ 일정표 자동 생성 | ✅ 지역별 필터링 | ✅ 가격 비교 | ✅ 최근 예약 사례</p>
-    <p style='color: gray; margin-top: 10px;'>강원대학교 강원지능화혁신센터 | Powered by LangGraph & OpenAI</p>
+    <p style='color: gray; margin-top: 10px;'>강원대학교 학생창의자율과제 7팀 | Powered by LangGraph & OpenAI</p>
 </div>
 """, unsafe_allow_html=True)
