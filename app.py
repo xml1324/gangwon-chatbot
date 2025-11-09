@@ -487,33 +487,136 @@ with tab1:
                 st.markdown(prompt)
             
             with st.chat_message("assistant"):
-                with st.spinner("💭 생각 중..."):
-                    try:
-                        app = create_workflow(
-                            API_KEY, 
-                            model_choice, 
-                            temperature,
-                            st.session_state.search_filters
-                        )
+                try:
+                    # 🔴 START: 스트리밍 로직
+                    # LangGraph의 app.invoke() 대신 핵심 로직을 직접 실행합니다.
+                    
+                    # 1. LLM 및 임베딩 초기화 (create_workflow에서 가져옴)
+                    os.environ["OPENAI_API_KEY"] = API_KEY
+                    llm = ChatOpenAI(model_name=model_choice, temperature=temperature)
+                    embeddings = OpenAIEmbeddings()
+
+                    # 2. Retriever 생성 (create_workflow의 로직 재현)
+                    # 참고: 이 부분은 매번 실행되어 비효율적일 수 있으나,
+                    # 현재 app (4).py 구조상 필터를 반영하기 위해 필요합니다.
+                    all_docs = []
+                    
+                    # 숙소 데이터 (필터링됨)
+                    filtered_accs = filter_accommodations(st.session_state.search_filters)
+                    for acc in filtered_accs:
+                        price_info = acc.get('price_per_night', {})
+                        price_text = chr(10).join([f'- {rt}: {p:,}원' for rt, p in price_info.items()]) if price_info else '가격 정보 없음'
+                        meals = acc.get('meals', {})
+                        meal_text = '포함 (뷔페)' if meals.get('breakfast_included', False) else f'별도 ({meals.get("breakfast_price", 0):,}원)'
+                        facilities_text = ', '.join(acc.get('facilities', []))
+                        attractions = acc.get('distance_to_attractions', {})
+                        attractions_text = chr(10).join([f'- {place}: {dist}' for place, dist in attractions.items()]) if attractions else '정보 없음'
                         
-                        initial_state = {
-                            "messages": [HumanMessage(content=prompt)],
-                            "user_query": prompt,
-                            "context": "",
-                            "response": "",
-                            "price_estimate": {},
-                            "itinerary": {}
-                        }
+                        all_docs.append(f"""
+숙소명: {acc.get('name', '이름 없음')}
+위치: {acc.get('location', '위치 정보 없음')}
+평점: {acc.get('rating', 'N/A')}
+청결도: {acc.get('cleanliness_score', 'N/A')}/5.0
+최근 예약: {acc.get('recent_bookings', 0)}건
+가격 (1박):
+{price_text}
+조식: {meal_text}
+시설: {facilities_text}
+주변 명소:
+{attractions_text}
+""")
+                    
+                    # 맛집 데이터
+                    for rest in RESTAURANT_DATA:
+                        all_docs.append(f"""
+맛집: {rest.get('name', '이름 없음')}
+위치: {rest.get('location', '위치 정보 없음')}
+평점: {rest.get('rating', 'N/A')}
+영업시간: {rest.get('hours', '영업시간 정보 없음')}
+가격대: {rest.get('price_range', '가격 정보 없음')}
+주차: {'가능' if rest.get('parking', False) else '불가'}
+인기메뉴: {', '.join(rest.get('popular_dishes', []))}
+분위기: {rest.get('atmosphere', '정보 없음')}
+""")
+                    
+                    # 관광지 데이터
+                    for attr in ATTRACTION_DATA:
+                        all_docs.append(f"""
+관광지: {attr.get('name', '이름 없음')}
+위치: {attr.get('location', '위치 정보 없음')}
+평점: {attr.get('rating', 'N/A')}
+입장료: {attr.get('entry_fee', '정보 없음')}
+운영시간: {attr.get('hours', '운영시간 정보 없음')}
+소요시간: {attr.get('time_needed', '정보 없음')}
+계절추천: {', '.join(attr.get('best_seasons', []))}
+""")
+                    
+                    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+                    splits = text_splitter.create_documents(all_docs)
+                    vectorstore = Chroma.from_documents(documents=splits, embedding=embeddings)
+                    retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+
+                    # 3. 컨텍스트 검색 (retrieve_context 로직)
+                    docs = retriever.get_relevant_documents(prompt)
+                    context = "\n\n".join([doc.page_content for doc in docs])
+
+                    # 4. 프롬프트 생성 (generate_response 로직)
+                    system_prompt = f"""당신은 강원도 관광 및 숙박 전문 AI 컨시어지입니다.
+
+**설문 결과 반영 - 반드시 포함해야 할 정보:**
+1. 가격 정보 (가장 중요!)
+2. 위치 및 거리 정보
+3. 객실 타입 및 수용 인원
+4. 식사 포함 여부
+5. 주차 가능 여부
+6. 청결도 및 시설 정보
+7. 최근 예약 사례
+
+**컨텍스트:**
+{context}
+
+**답변 가이드라인:**
+- 숙소 추천 시: 가격(필수), 위치, 객실 타입, 식사, 주차, 청결도 점수를 모두 포함
+- 맛집 추천 시: 가격대, 위치, 주차 정보, 운영 시간, 인기 메뉴 포함
+- 여행 코스: 동선을 고려한 효율적인 일정, 이동 거리와 시간 명시
+- 견적: 구체적인 금액과 항목별 비용 분석
+- 출처: 리뷰 데이터 또는 실제 예약 사례 기반임을 명시
+
+**응답 형식:**
+- 요청에 맞는 구체적 정보 제공
+- 가격은 반드시 명시 (예: 120,000원/박)
+- 거리는 km + 이동 시간 표시 (예: 5km, 차로 10분)
+- 신뢰도 향상을 위해 최근 예약 건수나 리뷰 점수 언급"""
+
+                    prompt_template = ChatPromptTemplate.from_messages([
+                        ("system", system_prompt),
+                        MessagesPlaceholder(variable_name="messages")
+                    ])
+                    
+                    chain = prompt_template | llm
+
+                    # 5. 대화 기록 준비
+                    chat_history = []
+                    for msg in st.session_state.messages:
+                        if msg["role"] == "user":
+                            chat_history.append(HumanMessage(content=msg["content"]))
+                        else:
+                            chat_history.append(AIMessage(content=msg["content"]))
+
+                    # 6. 🚀 st.write_stream을 사용하여 스트리밍 실행
+                    response_stream = chain.stream({"messages": chat_history})
+                    
+                    # st.write_stream이 스트리밍을 처리하고, 완료된 전체 텍스트를 반환
+                    full_response = st.write_stream(response_stream)
+                    
+                    # 7. 스트리밍 완료 후 전체 응답을 세션 상태에 저장
+                    st.session_state.messages.append({"role": "assistant", "content": full_response})
+                    
+                    # 🔴 END: 스트리밍 로직
                         
-                        result = app.invoke(initial_state)
-                        response = result["response"]
-                        
-                        st.markdown(response)
-                        st.session_state.messages.append({"role": "assistant", "content": response})
-                        
-                    except Exception as e:
-                        st.error(f"❌ 오류: {str(e)}")
-                        st.info("잠시 후 다시 시도해주세요.")
+                except Exception as e:
+                    st.error(f"❌ 오류: {str(e)}")
+                    st.info("잠시 후 다시 시도해주세요.")
 
 with tab2:
     st.subheader("💰 여행 비용 견적 계산기")
