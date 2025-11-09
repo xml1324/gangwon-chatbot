@@ -73,8 +73,12 @@ st.markdown("""
     border-left: 4px solid #667eea;
 }
 
+/* ==================== 채팅 UI 개선 ==================== */
+
 /* 채팅 입력창 하단 고정 */
-.stChatFloatingInputContainer {
+section[data-testid="stBottom"] > div,
+.stChatFloatingInputContainer,
+.stChatInputContainer {
     position: fixed !important;
     bottom: 0 !important;
     left: 0 !important;
@@ -82,16 +86,20 @@ st.markdown("""
     background-color: white !important;
     border-top: 1px solid #e6e6e6 !important;
     padding: 1rem !important;
-    z-index: 999 !important;
+    z-index: 9999 !important;
     box-shadow: 0 -2px 10px rgba(0,0,0,0.1) !important;
+    margin: 0 !important;
 }
 
-/* 다크모드 지원 */
-[data-theme="dark"] .stChatFloatingInputContainer {
+/* 다크모드 - 채팅 입력창 */
+[data-theme="dark"] section[data-testid="stBottom"] > div,
+[data-theme="dark"] .stChatFloatingInputContainer,
+[data-theme="dark"] .stChatInputContainer {
     background-color: #0e1117 !important;
     border-top: 1px solid #31333F !important;
 }
 
+/* 다크모드 - 기타 요소 */
 [data-theme="dark"] .price-box {
     background-color: #1e2130 !important;
     color: #fafafa !important;
@@ -103,22 +111,29 @@ st.markdown("""
     color: #fafafa !important;
 }
 
-/* 채팅 메시지 영역에 하단 여백 추가 (입력창 공간 확보) */
-.main .block-container {
+/* 메인 컨텐츠 하단 여백 (입력창 공간 확보) */
+.main .block-container,
+section.main > div {
     padding-bottom: 120px !important;
 }
 
-/* 채팅 입력창 스타일 개선 - 여러 줄 입력 지원 */
-.stChatInputContainer > div {
-    border-radius: 20px !important;
-}
-
+/* 입력창 여러 줄 지원 및 스타일 개선 */
+section[data-testid="stBottom"] textarea,
 .stChatInputContainer textarea {
     min-height: 50px !important;
     max-height: 200px !important;
     resize: vertical !important;
     font-size: 16px !important;
     line-height: 1.5 !important;
+    border-radius: 20px !important;
+}
+
+/* 입력창 포커스 시 스타일 */
+section[data-testid="stBottom"] textarea:focus,
+.stChatInputContainer textarea:focus {
+    border-color: #667eea !important;
+    box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2) !important;
+    outline: none !important;
 }
 
 /* 채팅 메시지 영역 스크롤 */
@@ -160,16 +175,6 @@ st.markdown("""
     background: #666;
 }
 
-/* 자동 스크롤 애니메이션 */
-@keyframes smoothScroll {
-    from {
-        scroll-behavior: smooth;
-    }
-    to {
-        scroll-behavior: smooth;
-    }
-}
-
 /* 채팅 메시지 fade-in 애니메이션 */
 .stChatMessage {
     animation: fadeIn 0.3s ease-in;
@@ -186,15 +191,19 @@ st.markdown("""
     }
 }
 
-/* 입력창 포커스 시 스타일 */
-.stChatInputContainer textarea:focus {
-    border-color: #667eea !important;
-    box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2) !important;
+/* 부드러운 스크롤 애니메이션 */
+@keyframes smoothScroll {
+    from {
+        scroll-behavior: smooth;
+    }
+    to {
+        scroll-behavior: smooth;
+    }
 }
 </style>
 
 <script>
-// 자동 스크롤 스크립트
+// 자동 스크롤 기능
 function scrollToBottom() {
     const chatContainer = document.querySelector('[data-testid="stVerticalBlock"]');
     if (chatContainer) {
@@ -202,16 +211,18 @@ function scrollToBottom() {
     }
 }
 
-// 새 메시지 감지 및 자동 스크롤
+// 새 메시지 감지
 const observer = new MutationObserver(function(mutations) {
     mutations.forEach(function(mutation) {
         if (mutation.addedNodes.length) {
+            // 사이드바의 체크박스 상태를 확인 (이 부분은 Streamlit에서 직접 제어)
+            // 여기서는 무조건 스크롤하도록 두되, Streamlit 측에서 스크립트 주입을 제어
             setTimeout(scrollToBottom, 100);
         }
     });
 });
 
-// DOM 로드 후 observer 시작
+// 페이지 로드 시 observer 시작
 window.addEventListener('load', function() {
     const chatContainer = document.querySelector('[data-testid="stVerticalBlock"]');
     if (chatContainer) {
@@ -295,6 +306,26 @@ with st.sidebar:
     )
     
     st.divider()
+
+    st.subheader("💬 채팅 UI")
+    
+    st.info("""
+    **💡 다크모드 전환**
+    
+    화면 우측 상단 ⋮ 메뉴 → Settings → Theme
+    - Light (라이트 모드)
+    - Dark (다크 모드)
+    """)
+    
+    auto_scroll = st.checkbox("자동 스크롤", value=True, help="새 메시지 생성 시 자동으로 하단 스크롤")
+    
+    if "auto_scroll" not in st.session_state:
+        st.session_state.auto_scroll = True
+    st.session_state.auto_scroll = auto_scroll
+    
+    st.caption("💡 Shift+Enter로 여러 줄 입력 가능")
+    
+    st.divider()
     
     # 검색 필터
     st.subheader("🔍 검색 필터")
@@ -343,7 +374,7 @@ with st.sidebar:
     st.divider()
     st.caption("강원대학교 강원지능화혁신센터")
 
-# 헬퍼 함수들
+# 헬퍼 함수들 (app (6).py의 안정적인 .get() 및 try/except 로직 유지)
 def filter_accommodations(filters):
     """필터 조건에 맞는 숙소 검색"""
     results = []
@@ -435,6 +466,8 @@ def generate_itinerary_text(package):
     
     return text
 
+# [참고] create_workflow 함수는 app (6).py에 정의되어 있으나
+# 실제로는 사용되지 않고 있음 (그대로 둠)
 def create_workflow(api_key, model_name, temp, filters):
     """LangGraph 워크플로우 생성 - proxies 오류 수정 버전"""
     
@@ -616,27 +649,24 @@ with tab1:
             st.session_state.quick_query = "춘천 1박 2일 여행 일정 짜줘. 가격도 함께 알려줘"
     
     # 대화 내역
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-    
-    # 🔽🔽🔽 --- 신규 코드 --- 🔽🔽🔽
-    # 대화 내역이 렌더링된 *후*, 채팅 입력창이 렌더링되기 *전*에
-    # JavaScript를 주입하여 페이지를 맨 아래로 스크롤합니다.
-    # 이 스크립트는 새 메시지가 추가되어 앱이 다시 실행될 때마다 작동하여
-    # 항상 최신 메시지를 볼 수 있게 합니다.
-    st.markdown("""
-    <script>
-        // 이 스크립트는 DOM이 렌더링된 후 실행됩니다.
-        // window.scrollTo(0, document.body.scrollHeight)는
-        // 뷰포트를 문서의 맨 아래로 즉시 이동시킵니다.
-        window.scrollTo(0, document.body.scrollHeight);
-    </script>
-    """, unsafe_allow_html=True)
-    # 🔼🔼🔼 --- 신규 코드 --- 🔼🔼🔼
+    chat_container = st.container()
+    with chat_container:
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
 
-    # 1. st.chat_input을 항상 렌더링하여 화면 하단에 고정시킵니다.
-    chat_prompt = st.chat_input("예: '춘천에서 1박 2일 가족 여행 가격 얼마나 들어? 숙소도 추천해줘'")
+    # 자동 스크롤 스크립트 (사이드바 체크박스 연동)
+    if st.session_state.get("auto_scroll", True) and len(st.session_state.messages) > 0:
+        st.markdown("""
+        <script>
+        setTimeout(function() {
+            window.scrollTo(0, document.body.scrollHeight);
+        }, 100);
+        </script>
+        """, unsafe_allow_html=True)
+
+    # 1. st.chat_input을 항상 렌더링 (안내 문구 수정)
+    chat_prompt = st.chat_input("💭 메시지를 입력하세요 (Shift+Enter로 줄바꿈)")
     
     # 2. 버튼 클릭(빠른 질문)을 별도로 처리합니다.
     button_prompt = None
@@ -647,6 +677,7 @@ with tab1:
     # 3. 버튼 입력(button_prompt) 또는 채팅 입력(chat_prompt) 중 하나를 실제 프롬프트로 사용합니다.
     prompt = button_prompt or chat_prompt
 
+    # [참고] app (6).py의 RAG + 스트리밍 로직은 그대로 유지
     if prompt:
         if not API_KEY:
             st.error("⚠️ API 키가 설정되지 않았습니다. 사이드바를 확인해주세요.")
@@ -661,7 +692,7 @@ with tab1:
                 # RAG 검색 및 컨텍스트 생성 중 스피너 표시
                 with st.spinner("💭 관련 정보를 검색 중..."):
                     try:
-                        # (이하 스트리밍/RAG 로직은 기존과 동일)
+                        # (이하 스트리밍/RAG 로직은 기존 app (6).py와 동일)
                         
                         # 1. LLM 및 임베딩 초기화
                         os.environ["OPENAI_API_KEY"] = API_KEY
@@ -773,7 +804,7 @@ with tab1:
                             else:
                                 chat_history.append(AIMessage(content=msg["content"]))
 
-                        # 6. 🚀 st.write_stream을 사용하여 스트리밍 실행 (스피너는 여기서 사라짐)
+                        # 6. 🚀 st.write_stream을 사용하여 스트리밍 실행 (핵심 기능 유지)
                         response_stream = chain.stream({"messages": chat_history})
                         full_response = st.write_stream(response_stream)
                         
@@ -854,6 +885,7 @@ with tab3:
         
         st.success("✅ 일정표가 생성되었습니다!")
 
+# [참고] app (6).py의 안정적인 try/except 로직 유지
 with tab4:
     st.subheader("🏨 숙소 실시간 검색")
     st.info("💡 **설문 결과**: 가격, 위치, 객실 타입, 식사 정보가 필수입니다!")
@@ -896,6 +928,7 @@ with tab4:
         except Exception as e:
             st.error(f"숙소 정보 표시 오류: {str(e)}")
 
+# [참고] app (6).py의 안정적인 try/except 로직 유지
 with tab5:
     st.subheader("📊 숙소 가격 비교")
     st.info("💡 **설문 결과**: 신뢰를 위해 가격 비교 정보가 중요합니다!")
