@@ -1,15 +1,20 @@
 [theme]
-primaryColor="#FF4B4B"
-backgroundColor="#FFFFFF"
-secondaryBackgroundColor="#F0F2F6"
-textColor="#262730"
-font="sans serif"
+# 기본 테마 설정 (사용자가 변경 가능)
+primaryColor = "#667eea"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#f0f2f6"
+textColor = "#262730"
+font = "sans serif"
 
 [server]
+# 파일 변경 감지 설정
+fileWatcherType = "auto"
 headless = true
 port = 8501
 enableCORS = false
 enableXsrfProtection = true
 
 [browser]
+# 브라우저 설정
 gatherUsageStats = false
+
