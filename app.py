@@ -309,7 +309,7 @@ def initialize_vector_store(_api_key):
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
     splits = text_splitter.create_documents(texts)
     
-    embeddings = OpenAIEmbeddings(openai_api_key=_api_key)
+    embeddings = OpenAIEmbeddings(api_key=_api_key)
     vector_store = Chroma.from_documents(documents=splits, embedding=embeddings)
     
     return vector_store
