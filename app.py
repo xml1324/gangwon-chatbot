@@ -199,28 +199,40 @@ def filter_accommodations(filters):
     results = []
     
     for acc in ACCOMMODATION_DATA:
-        # 지역 필터
-        if filters["region"] and "전체" not in filters["region"]:
-            location_match = any(region in acc["location"] for region in filters["region"])
-            if not location_match:
+        try:
+            # 지역 필터
+            if filters["region"] and "전체" not in filters["region"]:
+                location = acc.get("location", "")
+                location_match = any(region in location for region in filters["region"])
+                if not location_match:
+                    continue
+            
+            # 가격 필터
+            price_per_night = acc.get("price_per_night", {})
+            if not price_per_night:
                 continue
-        
-        # 가격 필터
-        min_price = min(acc["price_per_night"].values())
-        max_price = max(acc["price_per_night"].values())
-        price_min, price_max = filters["price_range"]
-        if not (price_min * 10000 <= min_price <= price_max * 10000):
+            min_price = min(price_per_night.values())
+            max_price = max(price_per_night.values())
+            price_min, price_max = filters["price_range"]
+            if not (price_min * 10000 <= min_price <= price_max * 10000):
+                continue
+            
+            # 조식 필터
+            if filters["meal_included"]:
+                meals = acc.get("meals", {})
+                if not meals.get("breakfast_included", False):
+                    continue
+            
+            # 주차 필터
+            if filters["parking"]:
+                facilities = acc.get("facilities", [])
+                if "주차장" not in str(facilities):
+                    continue
+            
+            results.append(acc)
+        except Exception as e:
+            # 데이터 오류가 있는 항목은 건너뜀
             continue
-        
-        # 조식 필터
-        if filters["meal_included"] and not acc["meals"]["breakfast_included"]:
-            continue
-        
-        # 주차 필터
-        if filters["parking"] and "주차장" not in str(acc["facilities"]):
-            continue
-        
-        results.append(acc)
     
     return results
 
@@ -293,49 +305,64 @@ def create_workflow(api_key, model_name, temp, filters):
     # 숙소 데이터
     filtered_accs = filter_accommodations(filters)
     for acc in filtered_accs:
+        # 가격 정보 안전하게 처리
+        price_info = acc.get('price_per_night', {})
+        price_text = chr(10).join([f'- {rt}: {p:,}원' for rt, p in price_info.items()]) if price_info else '가격 정보 없음'
+        
+        # 식사 정보 안전하게 처리
+        meals = acc.get('meals', {})
+        meal_text = '포함 (뷔페)' if meals.get('breakfast_included', False) else f'별도 ({meals.get("breakfast_price", 0):,}원)'
+        
+        # 시설 정보 안전하게 처리
+        facilities_text = ', '.join(acc.get('facilities', []))
+        
+        # 주변 명소 안전하게 처리
+        attractions = acc.get('distance_to_attractions', {})
+        attractions_text = chr(10).join([f'- {place}: {dist}' for place, dist in attractions.items()]) if attractions else '정보 없음'
+        
         doc_text = f"""
-숙소명: {acc['name']}
-위치: {acc['location']}
-평점: {acc['rating']}
-청결도: {acc['cleanliness_score']}/5.0
-최근 예약: {acc['recent_bookings']}건
+숙소명: {acc.get('name', '이름 없음')}
+위치: {acc.get('location', '위치 정보 없음')}
+평점: {acc.get('rating', 'N/A')}
+청결도: {acc.get('cleanliness_score', 'N/A')}/5.0
+최근 예약: {acc.get('recent_bookings', 0)}건
 
 가격 (1박):
-{chr(10).join([f'- {rt}: {p:,}원' for rt, p in acc['price_per_night'].items()])}
+{price_text}
 
-조식: {'포함 (뷔페)' if acc['meals']['breakfast_included'] else f'별도 ({acc['meals']['breakfast_price']:,}원)'}
+조식: {meal_text}
 
-시설: {', '.join(acc['facilities'])}
+시설: {facilities_text}
 
 주변 명소:
-{chr(10).join([f'- {place}: {dist}' for place, dist in acc['distance_to_attractions'].items()])}
+{attractions_text}
 """
         all_docs.append(doc_text)
     
     # 맛집 데이터
     for rest in RESTAURANT_DATA:
         doc_text = f"""
-맛집: {rest['name']}
-위치: {rest['location']}
-평점: {rest['rating']}
-영업시간: {rest['hours']}
-가격대: {rest['price_range']}
-주차: {'가능' if rest['parking'] else '불가'}
-인기메뉴: {', '.join(rest['popular_dishes'])}
-분위기: {rest['atmosphere']}
+맛집: {rest.get('name', '이름 없음')}
+위치: {rest.get('location', '위치 정보 없음')}
+평점: {rest.get('rating', 'N/A')}
+영업시간: {rest.get('hours', '영업시간 정보 없음')}
+가격대: {rest.get('price_range', '가격 정보 없음')}
+주차: {'가능' if rest.get('parking', False) else '불가'}
+인기메뉴: {', '.join(rest.get('popular_dishes', []))}
+분위기: {rest.get('atmosphere', '정보 없음')}
 """
         all_docs.append(doc_text)
     
     # 관광지 데이터
     for attr in ATTRACTION_DATA:
         doc_text = f"""
-관광지: {attr['name']}
-위치: {attr['location']}
-평점: {attr['rating']}
-입장료: {attr['entry_fee']}
-운영시간: {attr['hours']}
-소요시간: {attr['time_needed']}
-계절추천: {', '.join(attr['best_seasons'])}
+관광지: {attr.get('name', '이름 없음')}
+위치: {attr.get('location', '위치 정보 없음')}
+평점: {attr.get('rating', 'N/A')}
+입장료: {attr.get('entry_fee', '정보 없음')}
+운영시간: {attr.get('hours', '운영시간 정보 없음')}
+소요시간: {attr.get('time_needed', '정보 없음')}
+계절추천: {', '.join(attr.get('best_seasons', []))}
 """
         all_docs.append(doc_text)
     
@@ -561,25 +588,38 @@ with tab4:
     st.write(f"**검색 결과: {len(filtered_results)}개**")
     
     for acc in filtered_results:
-        with st.expander(f"⭐ {acc['rating']} | {acc['name']} - {acc['location']}"):
-            col1, col2 = st.columns([2, 1])
+        try:
+            rating = acc.get('rating', 'N/A')
+            name = acc.get('name', '이름 없음')
+            location = acc.get('location', '위치 정보 없음')
             
-            with col1:
-                st.markdown(f"**📍 위치**: {acc['location']}")
-                st.markdown(f"**🧹 청결도**: {acc['cleanliness_score']}/5.0")
-                st.markdown(f"**📅 최근 예약**: {acc['recent_bookings']}건")
+            with st.expander(f"⭐ {rating} | {name} - {location}"):
+                col1, col2 = st.columns([2, 1])
                 
-                st.markdown("**💰 가격 (1박 기준)**")
-                for room_type, price in acc['price_per_night'].items():
-                    st.write(f"  - {room_type}: {price:,}원")
-                
-                st.markdown(f"**🍽️ 조식**: {'포함 (뷔페)' if acc['meals']['breakfast_included'] else f'별도 ({acc['meals']['breakfast_price']:,}원)'}")
-                st.markdown(f"**🎯 시설**: {', '.join(acc['facilities'][:5])}")
-                
-            with col2:
-                st.markdown("**🚗 주변 명소**")
-                for place, dist in list(acc['distance_to_attractions'].items())[:3]:
-                    st.write(f"{place}: {dist}")
+                with col1:
+                    st.markdown(f"**📍 위치**: {location}")
+                    st.markdown(f"**🧹 청결도**: {acc.get('cleanliness_score', 'N/A')}/5.0")
+                    st.markdown(f"**📅 최근 예약**: {acc.get('recent_bookings', 0)}건")
+                    
+                    st.markdown("**💰 가격 (1박 기준)**")
+                    price_per_night = acc.get('price_per_night', {})
+                    for room_type, price in price_per_night.items():
+                        st.write(f"  - {room_type}: {price:,}원")
+                    
+                    meals = acc.get('meals', {})
+                    breakfast_text = '포함 (뷔페)' if meals.get('breakfast_included', False) else f'별도 ({meals.get("breakfast_price", 0):,}원)'
+                    st.markdown(f"**🍽️ 조식**: {breakfast_text}")
+                    
+                    facilities = acc.get('facilities', [])
+                    st.markdown(f"**🎯 시설**: {', '.join(facilities[:5])}")
+                    
+                with col2:
+                    st.markdown("**🚗 주변 명소**")
+                    attractions = acc.get('distance_to_attractions', {})
+                    for place, dist in list(attractions.items())[:3]:
+                        st.write(f"{place}: {dist}")
+        except Exception as e:
+            st.error(f"숙소 정보 표시 오류: {str(e)}")
 
 with tab5:
     st.subheader("📊 숙소 가격 비교")
@@ -588,15 +628,24 @@ with tab5:
     # 지역별 가격 비교
     regions = {}
     for acc in ACCOMMODATION_DATA:
-        location = acc['location'].split()[0]
-        if location not in regions:
-            regions[location] = []
-        min_price = min(acc['price_per_night'].values())
-        regions[location].append({
-            "name": acc['name'],
-            "min_price": min_price,
-            "rating": acc['rating']
-        })
+        try:
+            location = acc.get('location', '정보 없음')
+            location_key = location.split()[0] if location else '기타'
+            if location_key not in regions:
+                regions[location_key] = []
+            
+            price_per_night = acc.get('price_per_night', {})
+            if not price_per_night:
+                continue
+                
+            min_price = min(price_per_night.values())
+            regions[location_key].append({
+                "name": acc.get('name', '이름 없음'),
+                "min_price": min_price,
+                "rating": acc.get('rating', 'N/A')
+            })
+        except Exception as e:
+            continue
     
     for region, accs in regions.items():
         st.markdown(f"### 📍 {region}")
@@ -609,14 +658,19 @@ with tab5:
     st.markdown("### 🛏️ 객실 타입별 평균 가격")
     room_type_prices = {}
     for acc in ACCOMMODATION_DATA:
-        for room_type, price in acc['price_per_night'].items():
-            if room_type not in room_type_prices:
-                room_type_prices[room_type] = []
-            room_type_prices[room_type].append(price)
+        try:
+            price_per_night = acc.get('price_per_night', {})
+            for room_type, price in price_per_night.items():
+                if room_type not in room_type_prices:
+                    room_type_prices[room_type] = []
+                room_type_prices[room_type].append(price)
+        except Exception as e:
+            continue
     
     for room_type, prices in room_type_prices.items():
-        avg_price = sum(prices) / len(prices)
-        st.write(f"- **{room_type}**: 평균 {avg_price:,.0f}원 (최저 {min(prices):,}원 ~ 최고 {max(prices):,}원)")
+        if prices:
+            avg_price = sum(prices) / len(prices)
+            st.write(f"- **{room_type}**: 평균 {avg_price:,.0f}원 (최저 {min(prices):,}원 ~ 최고 {max(prices):,}원)")
 
 # 푸터
 st.divider()
