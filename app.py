@@ -470,7 +470,20 @@ with tab1:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
     
-    # ----------------- ⬇️ 로직 수정 ⬇️ -----------------
+    # 🔽🔽🔽 --- 신규 코드 --- 🔽🔽🔽
+    # 대화 내역이 렌더링된 *후*, 채팅 입력창이 렌더링되기 *전*에
+    # JavaScript를 주입하여 페이지를 맨 아래로 스크롤합니다.
+    # 이 스크립트는 새 메시지가 추가되어 앱이 다시 실행될 때마다 작동하여
+    # 항상 최신 메시지를 볼 수 있게 합니다.
+    st.markdown("""
+    <script>
+        // 이 스크립트는 DOM이 렌더링된 후 실행됩니다.
+        // window.scrollTo(0, document.body.scrollHeight)는
+        // 뷰포트를 문서의 맨 아래로 즉시 이동시킵니다.
+        window.scrollTo(0, document.body.scrollHeight);
+    </script>
+    """, unsafe_allow_html=True)
+    # 🔼🔼🔼 --- 신규 코드 --- 🔼🔼🔼
 
     # 1. st.chat_input을 항상 렌더링하여 화면 하단에 고정시킵니다.
     chat_prompt = st.chat_input("예: '춘천에서 1박 2일 가족 여행 가격 얼마나 들어? 숙소도 추천해줘'")
@@ -483,8 +496,6 @@ with tab1:
 
     # 3. 버튼 입력(button_prompt) 또는 채팅 입력(chat_prompt) 중 하나를 실제 프롬프트로 사용합니다.
     prompt = button_prompt or chat_prompt
-
-    # ----------------- ⬆️ 로직 수정 ⬆️ -----------------
 
     if prompt:
         if not API_KEY:
@@ -500,7 +511,7 @@ with tab1:
                 # RAG 검색 및 컨텍스트 생성 중 스피너 표시
                 with st.spinner("💭 관련 정보를 검색 중..."):
                     try:
-                        # (이전 답변의 스트리밍 로직과 동일)
+                        # (이하 스트리밍/RAG 로직은 기존과 동일)
                         
                         # 1. LLM 및 임베딩 초기화
                         os.environ["OPENAI_API_KEY"] = API_KEY
@@ -618,6 +629,11 @@ with tab1:
                         
                         # 7. 스트리밍 완료 후 전체 응답을 세션 상태에 저장
                         st.session_state.messages.append({"role": "assistant", "content": full_response})
+                        
+                        # 8. (중요) 세션 상태가 변경되었으므로, Streamlit은 이 블록 실행이
+                        # 끝난 직후 앱을 '다시 실행(re-run)'합니다. 
+                        # 이때 위에서 삽입한 스크롤 스크립트가 실행되어
+                        # 화면을 맨 아래로 내리게 됩니다.
                         
                     except Exception as e:
                         st.error(f"❌ 오류: {str(e)}")
