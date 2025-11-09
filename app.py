@@ -470,49 +470,58 @@ with tab1:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
     
-    # 입력
-    if hasattr(st.session_state, 'quick_query'):
-        prompt = st.session_state.quick_query
-        del st.session_state.quick_query
-    else:
-        prompt = st.chat_input("예: '춘천에서 1박 2일 가족 여행 가격 얼마나 들어? 숙소도 추천해줘'")
+    # ----------------- ⬇️ 로직 수정 ⬇️ -----------------
+
+    # 1. st.chat_input을 항상 렌더링하여 화면 하단에 고정시킵니다.
+    chat_prompt = st.chat_input("예: '춘천에서 1박 2일 가족 여행 가격 얼마나 들어? 숙소도 추천해줘'")
     
+    # 2. 버튼 클릭(빠른 질문)을 별도로 처리합니다.
+    button_prompt = None
+    if hasattr(st.session_state, 'quick_query'):
+        button_prompt = st.session_state.quick_query
+        del st.session_state.quick_query # 처리 후 즉시 삭제
+
+    # 3. 버튼 입력(button_prompt) 또는 채팅 입력(chat_prompt) 중 하나를 실제 프롬프트로 사용합니다.
+    prompt = button_prompt or chat_prompt
+
+    # ----------------- ⬆️ 로직 수정 ⬆️ -----------------
+
     if prompt:
         if not API_KEY:
             st.error("⚠️ API 키가 설정되지 않았습니다. 사이드바를 확인해주세요.")
         else:
+            # 4. (중요) 어떤 입력이든(버튼/채팅) 사용자 메시지를 화면과 기록에 추가
             st.session_state.messages.append({"role": "user", "content": prompt})
             
             with st.chat_message("user"):
                 st.markdown(prompt)
             
             with st.chat_message("assistant"):
-                try:
-                    # 🔴 START: 스트리밍 로직
-                    # LangGraph의 app.invoke() 대신 핵심 로직을 직접 실행합니다.
-                    
-                    # 1. LLM 및 임베딩 초기화 (create_workflow에서 가져옴)
-                    os.environ["OPENAI_API_KEY"] = API_KEY
-                    llm = ChatOpenAI(model_name=model_choice, temperature=temperature)
-                    embeddings = OpenAIEmbeddings()
-
-                    # 2. Retriever 생성 (create_workflow의 로직 재현)
-                    # 참고: 이 부분은 매번 실행되어 비효율적일 수 있으나,
-                    # 현재 app (4).py 구조상 필터를 반영하기 위해 필요합니다.
-                    all_docs = []
-                    
-                    # 숙소 데이터 (필터링됨)
-                    filtered_accs = filter_accommodations(st.session_state.search_filters)
-                    for acc in filtered_accs:
-                        price_info = acc.get('price_per_night', {})
-                        price_text = chr(10).join([f'- {rt}: {p:,}원' for rt, p in price_info.items()]) if price_info else '가격 정보 없음'
-                        meals = acc.get('meals', {})
-                        meal_text = '포함 (뷔페)' if meals.get('breakfast_included', False) else f'별도 ({meals.get("breakfast_price", 0):,}원)'
-                        facilities_text = ', '.join(acc.get('facilities', []))
-                        attractions = acc.get('distance_to_attractions', {})
-                        attractions_text = chr(10).join([f'- {place}: {dist}' for place, dist in attractions.items()]) if attractions else '정보 없음'
+                # RAG 검색 및 컨텍스트 생성 중 스피너 표시
+                with st.spinner("💭 관련 정보를 검색 중..."):
+                    try:
+                        # (이전 답변의 스트리밍 로직과 동일)
                         
-                        all_docs.append(f"""
+                        # 1. LLM 및 임베딩 초기화
+                        os.environ["OPENAI_API_KEY"] = API_KEY
+                        llm = ChatOpenAI(model_name=model_choice, temperature=temperature)
+                        embeddings = OpenAIEmbeddings()
+
+                        # 2. Retriever 생성 (필터링된 데이터 기반)
+                        all_docs = []
+                        
+                        # 숙소 데이터 (필터링됨)
+                        filtered_accs = filter_accommodations(st.session_state.search_filters)
+                        for acc in filtered_accs:
+                            price_info = acc.get('price_per_night', {})
+                            price_text = chr(10).join([f'- {rt}: {p:,}원' for rt, p in price_info.items()]) if price_info else '가격 정보 없음'
+                            meals = acc.get('meals', {})
+                            meal_text = '포함 (뷔페)' if meals.get('breakfast_included', False) else f'별도 ({meals.get("breakfast_price", 0):,}원)'
+                            facilities_text = ', '.join(acc.get('facilities', []))
+                            attractions = acc.get('distance_to_attractions', {})
+                            attractions_text = chr(10).join([f'- {place}: {dist}' for place, dist in attractions.items()]) if attractions else '정보 없음'
+                            
+                            all_docs.append(f"""
 숙소명: {acc.get('name', '이름 없음')}
 위치: {acc.get('location', '위치 정보 없음')}
 평점: {acc.get('rating', 'N/A')}
@@ -525,10 +534,10 @@ with tab1:
 주변 명소:
 {attractions_text}
 """)
-                    
-                    # 맛집 데이터
-                    for rest in RESTAURANT_DATA:
-                        all_docs.append(f"""
+                        
+                        # 맛집 데이터
+                        for rest in RESTAURANT_DATA:
+                            all_docs.append(f"""
 맛집: {rest.get('name', '이름 없음')}
 위치: {rest.get('location', '위치 정보 없음')}
 평점: {rest.get('rating', 'N/A')}
@@ -538,10 +547,10 @@ with tab1:
 인기메뉴: {', '.join(rest.get('popular_dishes', []))}
 분위기: {rest.get('atmosphere', '정보 없음')}
 """)
-                    
-                    # 관광지 데이터
-                    for attr in ATTRACTION_DATA:
-                        all_docs.append(f"""
+                        
+                        # 관광지 데이터
+                        for attr in ATTRACTION_DATA:
+                            all_docs.append(f"""
 관광지: {attr.get('name', '이름 없음')}
 위치: {attr.get('location', '위치 정보 없음')}
 평점: {attr.get('rating', 'N/A')}
@@ -550,18 +559,18 @@ with tab1:
 소요시간: {attr.get('time_needed', '정보 없음')}
 계절추천: {', '.join(attr.get('best_seasons', []))}
 """)
-                    
-                    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-                    splits = text_splitter.create_documents(all_docs)
-                    vectorstore = Chroma.from_documents(documents=splits, embedding=embeddings)
-                    retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+                        
+                        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+                        splits = text_splitter.create_documents(all_docs)
+                        vectorstore = Chroma.from_documents(documents=splits, embedding=embeddings)
+                        retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
 
-                    # 3. 컨텍스트 검색 (retrieve_context 로직)
-                    docs = retriever.get_relevant_documents(prompt)
-                    context = "\n\n".join([doc.page_content for doc in docs])
+                        # 3. 컨텍스트 검색
+                        docs = retriever.get_relevant_documents(prompt)
+                        context = "\n\n".join([doc.page_content for doc in docs])
 
-                    # 4. 프롬프트 생성 (generate_response 로직)
-                    system_prompt = f"""당신은 강원도 관광 및 숙박 전문 AI 컨시어지입니다.
+                        # 4. 프롬프트 생성
+                        system_prompt = f"""당신은 강원도 관광 및 숙박 전문 AI 컨시어지입니다.
 
 **설문 결과 반영 - 반드시 포함해야 할 정보:**
 1. 가격 정보 (가장 중요!)
@@ -588,35 +597,31 @@ with tab1:
 - 거리는 km + 이동 시간 표시 (예: 5km, 차로 10분)
 - 신뢰도 향상을 위해 최근 예약 건수나 리뷰 점수 언급"""
 
-                    prompt_template = ChatPromptTemplate.from_messages([
-                        ("system", system_prompt),
-                        MessagesPlaceholder(variable_name="messages")
-                    ])
-                    
-                    chain = prompt_template | llm
-
-                    # 5. 대화 기록 준비
-                    chat_history = []
-                    for msg in st.session_state.messages:
-                        if msg["role"] == "user":
-                            chat_history.append(HumanMessage(content=msg["content"]))
-                        else:
-                            chat_history.append(AIMessage(content=msg["content"]))
-
-                    # 6. 🚀 st.write_stream을 사용하여 스트리밍 실행
-                    response_stream = chain.stream({"messages": chat_history})
-                    
-                    # st.write_stream이 스트리밍을 처리하고, 완료된 전체 텍스트를 반환
-                    full_response = st.write_stream(response_stream)
-                    
-                    # 7. 스트리밍 완료 후 전체 응답을 세션 상태에 저장
-                    st.session_state.messages.append({"role": "assistant", "content": full_response})
-                    
-                    # 🔴 END: 스트리밍 로직
+                        prompt_template = ChatPromptTemplate.from_messages([
+                            ("system", system_prompt),
+                            MessagesPlaceholder(variable_name="messages")
+                        ])
                         
-                except Exception as e:
-                    st.error(f"❌ 오류: {str(e)}")
-                    st.info("잠시 후 다시 시도해주세요.")
+                        chain = prompt_template | llm
+
+                        # 5. 대화 기록 준비
+                        chat_history = []
+                        for msg in st.session_state.messages:
+                            if msg["role"] == "user":
+                                chat_history.append(HumanMessage(content=msg["content"]))
+                            else:
+                                chat_history.append(AIMessage(content=msg["content"]))
+
+                        # 6. 🚀 st.write_stream을 사용하여 스트리밍 실행 (스피너는 여기서 사라짐)
+                        response_stream = chain.stream({"messages": chat_history})
+                        full_response = st.write_stream(response_stream)
+                        
+                        # 7. 스트리밍 완료 후 전체 응답을 세션 상태에 저장
+                        st.session_state.messages.append({"role": "assistant", "content": full_response})
+                        
+                    except Exception as e:
+                        st.error(f"❌ 오류: {str(e)}")
+                        st.info("잠시 후 다시 시도해주세요.")
 
 with tab2:
     st.subheader("💰 여행 비용 견적 계산기")
