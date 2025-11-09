@@ -120,43 +120,6 @@ st.markdown("""
 /* 추가 CSS 없이도 하단 고정됩니다 */
 </style>
 """, unsafe_allow_html=True)
-    }
-}
-</style>
-
-<script>
-// 자동 스크롤 기능
-function scrollToBottom() {
-    const chatContainer = document.querySelector('[data-testid="stVerticalBlock"]');
-    if (chatContainer) {
-        chatContainer.scrollTop = chatContainer.scrollHeight;
-    }
-}
-
-// 새 메시지 감지
-const observer = new MutationObserver(function(mutations) {
-    mutations.forEach(function(mutation) {
-        if (mutation.addedNodes.length) {
-            // 사이드바의 체크박스 상태를 확인 (이 부분은 Streamlit에서 직접 제어)
-            // 여기서는 무조건 스크롤하도록 두되, Streamlit 측에서 스크립트 주입을 제어
-            setTimeout(scrollToBottom, 100);
-        }
-    });
-});
-
-// 페이지 로드 시 observer 시작
-window.addEventListener('load', function() {
-    const chatContainer = document.querySelector('[data-testid="stVerticalBlock"]');
-    if (chatContainer) {
-        observer.observe(chatContainer, {
-            childList: true,
-            subtree: true
-        });
-        scrollToBottom();
-    }
-});
-</script>
-""", unsafe_allow_html=True)
 
 # 상태 정의
 class AgentState(TypedDict):
