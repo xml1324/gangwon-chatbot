@@ -2,7 +2,7 @@
 
 > **설치 없이 웹에서 바로 사용하는 AI 관광 챗봇**
 > 
-> 🌐 **Live Demo**: [여기를 클릭하여 바로 사용하기](#) ← 배포 후 URL 업데이트
+> 🌐 **Live Demo**: [https://gangwon-chatbot.streamlit.app/](#) ← 배포 후 URL 업데이트
 
 [![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?style=for-the-badge&logo=Streamlit&logoColor=white)](https://streamlit.io)
 [![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=for-the-badge&logo=OpenAI&logoColor=white)](https://openai.com)
@@ -55,7 +55,7 @@
 
 ### 방법 1: 배포된 앱 사용 (추천)
 
-**바로 접속**: [https://your-app-name.streamlit.app](#)
+**바로 접속**: [https://gangwon-chatbot.streamlit.app/](#)
 
 - 설치 불필요
 - 회원가입 불필요
@@ -65,7 +65,7 @@
 
 ```bash
 # 1. 레포지토리 클론
-git clone https://github.com/your-username/gangwon-tourism-chatbot.git
+git clone https://github.com/your-username/gangwon-chatbot.git
 cd gangwon-tourism-chatbot
 
 # 2. 패키지 설치
@@ -231,10 +231,10 @@ A: 강릉씨베이호텔 ⭐ 4.8
 
 ## 📞 문의 및 지원
 
-- **개발팀**: 강원대학교 강원지능화혁신센터
+- **개발팀**: 강원대학교 학생창의자율과제 7팀
 - **담당 교수**: 김우주
-- **연구원**: 정현철, 안소라, 이래경, 이재명
-- **이메일**: brad0702@kangwon.ac.kr
+- **연구원**: 정현철(팀장), 안소라, 이래경, 이재명
+- **이메일**: brad0702@kangwon.ac.kr(팀장)
 
 ---
 
@@ -268,4 +268,4 @@ A: 강릉씨베이호텔 ⭐ 4.8
 
 **설치 없이 웹에서 바로 사용하세요!** 🌐
 
-[👉 지금 바로 사용하기](#) ← 배포 후 URL 업데이트
+[👉 https://gangwon-chatbot.streamlit.app/](#) ← 배포 후 URL 업데이트
