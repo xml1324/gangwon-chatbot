@@ -1,22 +1,13 @@
 import streamlit as st
 import os
-from typing import TypedDict, Annotated, Sequence, Dict, Any
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+import pandas as pd
+import glob
+from typing import Dict, List
+from langchain_core.messages import HumanMessage, AIMessage
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langgraph.graph import StateGraph, END
-import operator
-from datetime import datetime
-import json
-
-# 데이터 임포트
-from sample_data import SAMPLE_REVIEWS, SAMPLE_INTERVIEWS, TOURISM_INFO
-from enhanced_data import (
-    ACCOMMODATION_DATA, RESTAURANT_DATA, ATTRACTION_DATA,
-    PACKAGE_TEMPLATES, SEASONAL_RECOMMENDATIONS
-)
 
 # 페이지 설정
 st.set_page_config(
@@ -26,37 +17,202 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# API 키 가져오기 (Streamlit Cloud secrets 또는 환경 변수)
+# ============================================
+# 설정 및 경로 (Streamlit Cloud용)
+# ============================================
+
+REVIEWS_BASE_PATH = "리뷰"  # GitHub 저장소의 리뷰 폴더
+CATEGORIES = ['맛집 리뷰', '명소 리뷰', '병원 리뷰', '카페 리뷰']
+
+# ============================================
+# 네이버 리뷰 데이터 로딩 함수
+# ============================================
+
+@st.cache_data(show_spinner=False)
+def load_naver_reviews(base_path: str = REVIEWS_BASE_PATH) -> tuple:
+    """
+    4개 카테고리 폴더에서 모든 네이버 리뷰 엑셀 파일을 읽어옵니다.
+    
+    Returns:
+        (reviews_data, total_reviews) 튜플
+    """
+    all_reviews = {}
+    total_reviews = 0
+    
+    for category in CATEGORIES:
+        category_path = os.path.join(base_path, category)
+        category_reviews = []
+        
+        if not os.path.exists(category_path):
+            st.warning(f"⚠️ '{category}' 폴더를 찾을 수 없습니다: {category_path}")
+            all_reviews[category] = []
+            continue
+        
+        # 폴더 내의 모든 엑셀 파일 찾기
+        excel_files = glob.glob(os.path.join(category_path, "*.xlsx"))
+        excel_files.extend(glob.glob(os.path.join(category_path, "*.xls")))
+        
+        # 각 엑셀 파일 읽기
+        for file_path in excel_files:
+            try:
+                df = pd.read_excel(file_path)
+                
+                # 파일명에서 장소명 추출
+                file_name = os.path.basename(file_path)
+                place_name = file_name.replace('naver_review_', '').replace('.xlsx', '').replace('.xls', '').replace('_', ' ')
+                
+                # 각 리뷰를 딕셔너리로 변환
+                for _, row in df.iterrows():
+                    review = {
+                        'category': category,
+                        'place_name': row.get('store', place_name),
+                        'date': str(row.get('date', '')),
+                        'nickname': str(row.get('nickname', '익명')),
+                        'content': str(row.get('content', '')),
+                        'revisit': str(row.get('revisit', '')),
+                        'reply_date': str(row.get('reply_date', '')) if pd.notna(row.get('reply_date')) else '',
+                        'reply_txt': str(row.get('reply_txt', '')) if pd.notna(row.get('reply_txt')) else '',
+                        'file_source': file_name
+                    }
+                    
+                    # 내용이 있는 리뷰만 추가
+                    if review['content'] and review['content'] != 'nan':
+                        category_reviews.append(review)
+                        total_reviews += 1
+                
+            except Exception as e:
+                st.error(f"❌ 파일 로딩 실패: {file_path} - {str(e)}")
+                continue
+        
+        all_reviews[category] = category_reviews
+    
+    return all_reviews, total_reviews
+
+
+def prepare_review_documents(reviews_data: Dict[str, List[Dict]]) -> List[str]:
+    """
+    네이버 리뷰 데이터를 RAG용 문서로 변환합니다.
+    """
+    documents = []
+    
+    for category, reviews in reviews_data.items():
+        # 장소별로 리뷰 그룹화
+        place_reviews = {}
+        for review in reviews:
+            place_name = review['place_name']
+            if place_name not in place_reviews:
+                place_reviews[place_name] = []
+            place_reviews[place_name].append(review)
+        
+        # 각 장소에 대한 문서 생성
+        for place_name, place_review_list in place_reviews.items():
+            total_reviews = len(place_review_list)
+            revisit_count = sum(1 for r in place_review_list if '재방문' in r.get('revisit', '') or '번째' in r.get('revisit', ''))
+            revisit_rate = (revisit_count / total_reviews * 100) if total_reviews > 0 else 0
+            
+            # 긍정적 키워드 카운트
+            positive_keywords = ['맛있', '좋', '추천', '최고', '훌륭', '친절', '깨끗', '만족']
+            positive_count = sum(1 for r in place_review_list 
+                                for keyword in positive_keywords 
+                                if keyword in r.get('content', ''))
+            
+            # 대표 리뷰 선택 (긴 리뷰 우선, 최대 10개)
+            sorted_reviews = sorted(place_review_list, key=lambda x: len(x.get('content', '')), reverse=True)
+            top_reviews = sorted_reviews[:10]
+            
+            # 문서 생성
+            doc = f"""
+카테고리: {category}
+장소명: {place_name}
+
+[통계 정보]
+- 총 리뷰 수: {total_reviews}개
+- 재방문 리뷰: {revisit_count}개 ({revisit_rate:.1f}%)
+- 긍정 평가: {positive_count}회 언급
+
+[주요 리뷰 내용]
+"""
+            for idx, review in enumerate(top_reviews, 1):
+                content = review.get('content', '')[:400]
+                doc += f"\n리뷰 #{idx}\n"
+                doc += f"작성일: {review.get('date', '')}\n"
+                doc += f"작성자: {review.get('nickname', '익명')}\n"
+                if review.get('revisit'):
+                    doc += f"방문: {review['revisit']}\n"
+                doc += f"내용: {content}\n"
+                doc += "-" * 40 + "\n"
+            
+            documents.append(doc)
+    
+    return documents
+
+
+# ============================================
+# 벡터 스토어 관리 (Streamlit Cloud용 - 메모리 캐싱)
+# ============================================
+
+@st.cache_resource(show_spinner=False)
+def create_vector_store(reviews_data: Dict[str, List[Dict]], _api_key: str):
+    """
+    리뷰 데이터로부터 벡터 스토어를 생성합니다.
+    Streamlit Cloud에서는 메모리에 캐싱되어 앱 재시작 전까지 유지됩니다.
+    """
+    # 문서 준비
+    documents = prepare_review_documents(reviews_data)
+    
+    # 텍스트 분할
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=200
+    )
+    splits = text_splitter.create_documents(documents)
+    
+    # 임베딩 및 벡터 스토어 생성
+    embeddings = OpenAIEmbeddings(api_key=_api_key)
+    vectorstore = Chroma.from_documents(
+        documents=splits,
+        embedding=embeddings
+    )
+    
+    return vectorstore
+
+
+# ============================================
+# API 키 관리 (Streamlit Cloud Secrets 사용)
+# ============================================
+
 def get_api_key():
-    """API 키를 Streamlit secrets 또는 환경 변수에서 가져오기"""
+    """Streamlit Cloud Secrets에서 API 키 가져오기"""
     try:
-        # Streamlit Cloud secrets 시도
         return st.secrets["OPENAI_API_KEY"]
-    except:
-        # 환경 변수 시도
-        api_key = os.environ.get("OPENAI_API_KEY", "")
-        if api_key:
-            return api_key
+    except Exception as e:
         return None
 
+
+# ============================================
+# 세션 상태 초기화
+# ============================================
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "reviews_loaded" not in st.session_state:
+    st.session_state.reviews_loaded = False
+if "reviews_data" not in st.session_state:
+    st.session_state.reviews_data = {}
+if "total_reviews" not in st.session_state:
+    st.session_state.total_reviews = 0
+
+# API 키 확인
+API_KEY = get_api_key()
+
+# ============================================
 # 커스텀 CSS
+# ============================================
+
 st.markdown("""
 <style>
 .stButton>button {
     width: 100%;
-}
-.price-box {
-    background-color: #f0f2f6;
-    padding: 20px;
-    border-radius: 10px;
-    margin: 10px 0;
-}
-.recommendation-card {
-    border: 1px solid #ddd;
-    padding: 15px;
-    border-radius: 8px;
-    margin: 10px 0;
-    background-color: white;
 }
 .info-banner {
     background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
@@ -71,41 +227,32 @@ st.markdown("""
     padding: 15px;
     border-radius: 8px;
     border-left: 4px solid #667eea;
+    margin: 10px 0;
+}
+.cache-info {
+    background-color: #e8f4f8;
+    padding: 15px;
+    border-radius: 8px;
+    border-left: 4px solid #2196F3;
 }
 </style>
 """, unsafe_allow_html=True)
 
-# 상태 정의
-class AgentState(TypedDict):
-    messages: Annotated[Sequence[BaseMessage], operator.add]
-    user_query: str
-    context: str
-    response: str
-    price_estimate: Dict[str, Any]
-    itinerary: Dict[str, Any]
-
-# 세션 상태 초기화
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "search_filters" not in st.session_state:
-    st.session_state.search_filters = {}
-if "generated_itinerary" not in st.session_state:
-    st.session_state.generated_itinerary = None
-if "price_comparison" not in st.session_state:
-    st.session_state.price_comparison = None
-
-# API 키 확인
-API_KEY = get_api_key()
-
+# ============================================
 # 상단 배너
+# ============================================
+
 st.markdown("""
 <div class='info-banner'>
     <h1>🏔️ 강원도 관광 AI 컨시어지</h1>
-    <p>관광업 전문가 설문 기반 · 가격 견적 · 일정표 생성 · 실시간 필터링</p>
+    <p>네이버 리뷰 기반 · 실시간 답변 · Streamlit Cloud 최적화</p>
 </div>
 """, unsafe_allow_html=True)
 
+# ============================================
 # 사이드바
+# ============================================
+
 with st.sidebar:
     st.title("⚙️ 설정")
     
@@ -115,487 +262,164 @@ with st.sidebar:
     else:
         st.error("⚠️ API 키가 필요합니다")
         st.info("""
-        **로컬 테스트용**
+        **Streamlit Cloud에서 API 키 설정:**
         
-        1. `.streamlit/secrets.toml` 파일 생성
-        2. 아래 내용 추가:
+        1. 앱 대시보드 → Settings
+        2. Secrets 섹션 클릭
+        3. 아래 내용 입력:
         ```
-        OPENAI_API_KEY = "your-key-here"
+        OPENAI_API_KEY = "sk-your-key-here"
         ```
-        
-        **Streamlit Cloud 배포 시**
-        
-        앱 설정 → Secrets에서 설정
+        4. Save 클릭
         """)
     
     st.divider()
     
+    # 리뷰 데이터 자동 로딩
+    if not st.session_state.reviews_loaded:
+        with st.spinner("📂 리뷰 데이터 로딩 중..."):
+            try:
+                reviews_data, total_reviews = load_naver_reviews(REVIEWS_BASE_PATH)
+                
+                if total_reviews == 0:
+                    st.error(f"❌ 리뷰 데이터를 찾을 수 없습니다.")
+                    st.info(f"GitHub 저장소의 '{REVIEWS_BASE_PATH}' 폴더를 확인해주세요.")
+                else:
+                    st.session_state.reviews_data = reviews_data
+                    st.session_state.total_reviews = total_reviews
+                    st.session_state.reviews_loaded = True
+                    st.success(f"✅ {total_reviews:,}개의 리뷰를 로딩했습니다!")
+                    
+            except Exception as e:
+                st.error(f"❌ 리뷰 로딩 실패: {str(e)}")
+    
+    # 리뷰 데이터 통계
+    if st.session_state.reviews_loaded:
+        st.subheader("📊 리뷰 데이터")
+        st.metric("총 리뷰", f"{st.session_state.total_reviews:,}개")
+        
+        with st.expander("카테고리별 상세"):
+            for category, reviews in st.session_state.reviews_data.items():
+                if reviews:
+                    st.write(f"**{category}**: {len(reviews):,}개")
+    
+    st.divider()
+    
     # 모델 설정
+    st.subheader("🤖 AI 모델 설정")
     model_choice = st.selectbox(
-        "AI 모델",
+        "모델",
         ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"],
         index=0,
-        help="gpt-4o-mini 권장 (속도와 비용 최적화)"
+        help="gpt-4o-mini 권장"
     )
     
     temperature = st.slider(
-        "응답 창의성",
+        "창의성",
         0.0, 1.0, 0.7, 0.1,
         help="낮을수록 일관적, 높을수록 창의적"
     )
     
-    st.divider()
-    
-    # 검색 필터
-    st.subheader("🔍 검색 필터")
-    
-    region_filter = st.multiselect(
-        "지역",
-        ["춘천", "강릉", "속초", "평창", "전체"],
-        default=["전체"]
+    search_k = st.slider(
+        "검색 결과 수",
+        3, 15, 8, 1,
+        help="더 많은 관련 문서 검색"
     )
-    
-    price_range = st.slider(
-        "1박 가격대 (만원)",
-        0, 50, (0, 50),
-        help="숙박 시설 가격 범위"
-    )
-    
-    room_type_filter = st.multiselect(
-        "객실 타입",
-        ["스탠다드", "디럭스", "스위트", "패밀리", "오션뷰"],
-        help="원하는 객실 타입 선택"
-    )
-    
-    meal_filter = st.checkbox("조식 포함만", value=False)
-    parking_filter = st.checkbox("주차 가능만", value=False)
-    
-    st.session_state.search_filters = {
-        "region": region_filter,
-        "price_range": price_range,
-        "room_type": room_type_filter,
-        "meal_included": meal_filter,
-        "parking": parking_filter
-    }
     
     st.divider()
     
-    # 통계 정보
-    st.subheader("📊 데이터 정보")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("숙소", f"{len(ACCOMMODATION_DATA)}개")
-        st.metric("맛집", f"{len(RESTAURANT_DATA)}개")
-    with col2:
-        st.metric("관광지", f"{len(ATTRACTION_DATA)}개")
-        st.metric("패키지", f"{len(PACKAGE_TEMPLATES)}개")
+    # 캐싱 정보
+    st.markdown("""
+    <div class='cache-info'>
+    <strong>💡 Streamlit Cloud 캐싱</strong><br>
+    벡터 스토어가 메모리에 캐싱되어<br>
+    앱 재시작 전까지 빠르게 사용됩니다.
+    </div>
+    """, unsafe_allow_html=True)
     
     st.divider()
     st.caption("강원대학교 학생창의자율과제 7팀")
 
-# 헬퍼 함수들
-def filter_accommodations(filters):
-    """필터 조건에 맞는 숙소 검색"""
-    results = []
-    
-    for acc in ACCOMMODATION_DATA:
-        try:
-            # 지역 필터
-            if filters["region"] and "전체" not in filters["region"]:
-                location = acc.get("location", "")
-                location_match = any(region in location for region in filters["region"])
-                if not location_match:
-                    continue
-            
-            # 가격 필터
-            price_per_night = acc.get("price_per_night", {})
-            if not price_per_night:
-                continue
-            min_price = min(price_per_night.values())
-            max_price = max(price_per_night.values())
-            price_min, price_max = filters["price_range"]
-            if not (price_min * 10000 <= min_price <= price_max * 10000):
-                continue
-            
-            # 조식 필터
-            if filters["meal_included"]:
-                meals = acc.get("meals", {})
-                if not meals.get("breakfast_included", False):
-                    continue
-            
-            # 주차 필터
-            if filters["parking"]:
-                facilities = acc.get("facilities", [])
-                if "주차장" not in str(facilities):
-                    continue
-            
-            results.append(acc)
-        except Exception as e:
-            # 데이터 오류가 있는 항목은 건너뜀
-            continue
-    
-    return results
+# ============================================
+# 메인 탭
+# ============================================
 
-def calculate_trip_cost(duration, num_people, accommodation_type="standard"):
-    """여행 비용 견적 계산"""
-    costs = {
-        "accommodation": 0,
-        "meals": 0,
-        "attractions": 0,
-        "transportation": 0,
-        "total": 0
-    }
-    
-    nights = int(duration.split("박")[0]) if "박" in duration else 1
-    
-    if accommodation_type == "budget":
-        costs["accommodation"] = 80000 * nights
-    elif accommodation_type == "standard":
-        costs["accommodation"] = 150000 * nights
-    elif accommodation_type == "luxury":
-        costs["accommodation"] = 300000 * nights
-    
-    days = nights + 1
-    costs["meals"] = 30000 * num_people * days
-    costs["attractions"] = 15000 * num_people * days
-    costs["transportation"] = 50000 * num_people
-    
-    costs["total"] = sum(costs.values())
-    costs["per_person"] = costs["total"] / num_people if num_people > 0 else 0
-    
-    return costs
-
-def generate_itinerary_text(package):
-    """일정표 텍스트 생성"""
-    text = f"## {package['name']}\n\n"
-    text += f"**기간**: {package['duration']} | **인원**: {package['group_size']}명\n\n"
-    text += f"**총 비용**: {package['total_cost']:,}원 (1인당 {package['cost_per_person']:,}원)\n\n"
-    
-    for day_info in package['itinerary']:
-        text += f"\n### Day {day_info['day']}\n\n"
-        # 'activities' 대신 'schedule'을 사용하고, 내부 키들도 수정합니다.
-        for item in day_info['schedule']:
-            cost_text = f"{item['cost']:,}원" if item['cost'] > 0 else "무료"
-            notes_text = f" ({item['notes']})" if item['notes'] else ""
-            text += f"- **{item['time']}** | {item['activity']} - {cost_text}{notes_text}\n"
-    
-    # 구분선 스타일도 통일합니다.
-    text += f"\n\n**포함 사항**: {', '.join(package['included'])}\n"
-    text += f"**불포함 사항**: {', '.join(package['excluded'])}\n"
-    
-    return text
-
-def create_workflow(api_key, model_name, temp, filters):
-    """LangGraph 워크플로우 생성 - proxies 오류 수정 버전"""
-    
-    # 🔧 수정: 환경 변수로 API 키 설정 (전역)
-    os.environ["OPENAI_API_KEY"] = api_key
-    
-    # 🔧 수정: 파라미터 없이 초기화 (환경 변수 자동 사용)
-    llm = ChatOpenAI(
-        model_name=model_name,
-        temperature=temp
-    )
-    
-    # 🔧 수정: OpenAIEmbeddings도 파라미터 최소화
-    embeddings = OpenAIEmbeddings()
-    
-    # 컨텍스트 데이터 준비
-    all_docs = []
-    
-    # 숙소 데이터
-    filtered_accs = filter_accommodations(filters)
-    for acc in filtered_accs:
-        # 가격 정보 안전하게 처리
-        price_info = acc.get('price_per_night', {})
-        price_text = chr(10).join([f'- {rt}: {p:,}원' for rt, p in price_info.items()]) if price_info else '가격 정보 없음'
-        
-        # 식사 정보 안전하게 처리
-        meals = acc.get('meals', {})
-        meal_text = '포함 (뷔페)' if meals.get('breakfast_included', False) else f'별도 ({meals.get("breakfast_price", 0):,}원)'
-        
-        # 시설 정보 안전하게 처리
-        facilities_text = ', '.join(acc.get('facilities', []))
-        
-        # 주변 명소 안전하게 처리
-        attractions = acc.get('distance_to_attractions', {})
-        attractions_text = chr(10).join([f'- {place}: {dist}' for place, dist in attractions.items()]) if attractions else '정보 없음'
-        
-        doc_text = f"""
-숙소명: {acc.get('name', '이름 없음')}
-위치: {acc.get('location', '위치 정보 없음')}
-평점: {acc.get('rating', 'N/A')}
-청결도: {acc.get('cleanliness_score', 'N/A')}/5.0
-최근 예약: {acc.get('recent_bookings', 0)}건
-
-가격 (1박):
-{price_text}
-
-조식: {meal_text}
-
-시설: {facilities_text}
-
-주변 명소:
-{attractions_text}
-"""
-        all_docs.append(doc_text)
-    
-    # 맛집 데이터
-    for rest in RESTAURANT_DATA:
-        doc_text = f"""
-맛집: {rest.get('name', '이름 없음')}
-위치: {rest.get('location', '위치 정보 없음')}
-평점: {rest.get('rating', 'N/A')}
-영업시간: {rest.get('hours', '영업시간 정보 없음')}
-가격대: {rest.get('price_range', '가격 정보 없음')}
-주차: {'가능' if rest.get('parking', False) else '불가'}
-인기메뉴: {', '.join(rest.get('popular_dishes', []))}
-분위기: {rest.get('atmosphere', '정보 없음')}
-"""
-        all_docs.append(doc_text)
-    
-    # 관광지 데이터
-    for attr in ATTRACTION_DATA:
-        doc_text = f"""
-관광지: {attr.get('name', '이름 없음')}
-위치: {attr.get('location', '위치 정보 없음')}
-평점: {attr.get('rating', 'N/A')}
-입장료: {attr.get('entry_fee', '정보 없음')}
-운영시간: {attr.get('hours', '운영시간 정보 없음')}
-소요시간: {attr.get('time_needed', '정보 없음')}
-계절추천: {', '.join(attr.get('best_seasons', []))}
-"""
-        all_docs.append(doc_text)
-    
-    # 벡터스토어 생성
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200
-    )
-    splits = text_splitter.create_documents(all_docs)
-    
-    vectorstore = Chroma.from_documents(
-        documents=splits,
-        embedding=embeddings
-    )
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
-    
-    def retrieve_context(state: AgentState):
-        """컨텍스트 검색"""
-        query = state["user_query"]
-        docs = retriever.get_relevant_documents(query)
-        context = "\n\n".join([doc.page_content for doc in docs])
-        return {"context": context}
-    
-    def generate_response(state: AgentState):
-        """응답 생성"""
-        context = state.get("context", "")
-        messages = state["messages"]
-        
-        system_prompt = """당신은 강원도 관광 및 숙박 전문 AI 컨시어지입니다.
-
-**설문 결과 반영 - 반드시 포함해야 할 정보:**
-1. 가격 정보 (가장 중요!)
-2. 위치 및 거리 정보
-3. 객실 타입 및 수용 인원
-4. 식사 포함 여부
-5. 주차 가능 여부
-6. 청결도 및 시설 정보
-7. 최근 예약 사례
-
-**컨텍스트:**
-{context}
-
-**답변 가이드라인:**
-- 숙소 추천 시: 가격(필수), 위치, 객실 타입, 식사, 주차, 청결도 점수를 모두 포함
-- 맛집 추천 시: 가격대, 위치, 주차 정보, 운영 시간, 인기 메뉴 포함
-- 여행 코스: 동선을 고려한 효율적인 일정, 이동 거리와 시간 명시
-- 견적: 구체적인 금액과 항목별 비용 분석
-- 출처: 리뷰 데이터 또는 실제 예약 사례 기반임을 명시
-
-**응답 형식:**
-- 요청에 맞는 구체적 정보 제공
-- 가격은 반드시 명시 (예: 120,000원/박)
-- 거리는 km + 이동 시간 표시 (예: 5km, 차로 10분)
-- 신뢰도 향상을 위해 최근 예약 건수나 리뷰 점수 언급"""
-
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", system_prompt),
-            MessagesPlaceholder(variable_name="messages")
-        ])
-        
-        chain = prompt | llm
-        response = chain.invoke({"context": context, "messages": messages})
-        
-        return {
-            "response": response.content,
-            "messages": [AIMessage(content=response.content)]
-        }
-    
-    workflow = StateGraph(AgentState)
-    workflow.add_node("retrieve", retrieve_context)
-    workflow.add_node("generate", generate_response)
-    workflow.set_entry_point("retrieve")
-    workflow.add_edge("retrieve", "generate")
-    workflow.add_edge("generate", END)
-    
-    return workflow.compile()
-
-# 메인 UI - 탭 구성
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "💬 AI 상담", 
-    "💰 견적 계산기", 
-    "📋 일정표 생성", 
-    "🏨 숙소 검색",
-    "📊 가격 비교"
-])
+tab1, tab2 = st.tabs(["💬 AI 챗봇", "📊 리뷰 분석"])
 
 with tab1:
-    st.subheader("💬 AI 채팅 상담")
+    st.subheader("💬 AI 관광 컨시어지")
     
-    # 빠른 질문 버튼
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button("💰 가격 문의", use_container_width=True):
-            st.session_state.quick_query = "춘천 1박 2일 가족 여행 예상 비용 알려줘"
-    with col2:
-        if st.button("🏨 숙소 추천", use_container_width=True):
-            st.session_state.quick_query = "강릉에서 바다 보이는 숙소 추천해줘. 가격과 시설 정보도 알려줘"
-    with col3:
-        if st.button("📅 일정 짜기", use_container_width=True):
-            st.session_state.quick_query = "춘천 1박 2일 여행 일정 짜줘. 가격도 함께 알려줘"
-    
-    # 대화 내역
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-    
-    # ----------------- ⬇️ 로직 수정 ⬇️ -----------------
-
-    # 1. st.chat_input을 항상 렌더링하여 화면 하단에 고정시킵니다.
-    chat_prompt = st.chat_input("예: '춘천에서 1박 2일 가족 여행 가격 얼마나 들어? 숙소도 추천해줘'")
-    
-    # 2. 버튼 클릭(빠른 질문)을 별도로 처리합니다.
-    button_prompt = None
-    if hasattr(st.session_state, 'quick_query'):
-        button_prompt = st.session_state.quick_query
-        del st.session_state.quick_query # 처리 후 즉시 삭제
-
-    # 3. 버튼 입력(button_prompt) 또는 채팅 입력(chat_prompt) 중 하나를 실제 프롬프트로 사용합니다.
-    prompt = button_prompt or chat_prompt
-
-    # ----------------- ⬆️ 로직 수정 ⬆️ -----------------
-
-    if prompt:
-        if not API_KEY:
-            st.error("⚠️ API 키가 설정되지 않았습니다. 사이드바를 확인해주세요.")
-        else:
-            # 4. (중요) 어떤 입력이든(버튼/채팅) 사용자 메시지를 화면과 기록에 추가
+    if not st.session_state.reviews_loaded:
+        st.warning("⚠️ 리뷰 데이터를 로딩하는 중입니다...")
+    elif not API_KEY:
+        st.error("⚠️ API 키를 설정해주세요. (사이드바 참고)")
+    else:
+        st.info("💡 실제 방문객 리뷰를 기반으로 답변합니다!")
+        
+        # 대화 히스토리 표시
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+        
+        # 사용자 입력
+        if prompt := st.chat_input("예: 춘천에서 재방문율 높은 맛집 추천해줘"):
+            # 사용자 메시지 추가
             st.session_state.messages.append({"role": "user", "content": prompt})
             
             with st.chat_message("user"):
                 st.markdown(prompt)
             
+            # AI 응답 생성
             with st.chat_message("assistant"):
-                # RAG 검색 및 컨텍스트 생성 중 스피너 표시
-                with st.spinner("💭 관련 정보를 검색 중..."):
-                    try:
-                        # (이전 답변의 스트리밍 로직과 동일)
+                try:
+                    with st.spinner("🤔 답변 생성 중..."):
+                        # 벡터 스토어 생성 또는 로드 (캐싱됨)
+                        vectorstore = create_vector_store(
+                            st.session_state.reviews_data,
+                            API_KEY
+                        )
                         
-                        # 1. LLM 및 임베딩 초기화
-                        os.environ["OPENAI_API_KEY"] = API_KEY
-                        llm = ChatOpenAI(model_name=model_choice, temperature=temperature)
-                        embeddings = OpenAIEmbeddings()
-
-                        # 2. Retriever 생성 (필터링된 데이터 기반)
-                        all_docs = []
+                        # LLM 초기화
+                        llm = ChatOpenAI(
+                            model=model_choice,
+                            temperature=temperature,
+                            api_key=API_KEY,
+                            streaming=True
+                        )
                         
-                        # 숙소 데이터 (필터링됨)
-                        filtered_accs = filter_accommodations(st.session_state.search_filters)
-                        for acc in filtered_accs:
-                            price_info = acc.get('price_per_night', {})
-                            price_text = chr(10).join([f'- {rt}: {p:,}원' for rt, p in price_info.items()]) if price_info else '가격 정보 없음'
-                            meals = acc.get('meals', {})
-                            meal_text = '포함 (뷔페)' if meals.get('breakfast_included', False) else f'별도 ({meals.get("breakfast_price", 0):,}원)'
-                            facilities_text = ', '.join(acc.get('facilities', []))
-                            attractions = acc.get('distance_to_attractions', {})
-                            attractions_text = chr(10).join([f'- {place}: {dist}' for place, dist in attractions.items()]) if attractions else '정보 없음'
-                            
-                            all_docs.append(f"""
-숙소명: {acc.get('name', '이름 없음')}
-위치: {acc.get('location', '위치 정보 없음')}
-평점: {acc.get('rating', 'N/A')}
-청결도: {acc.get('cleanliness_score', 'N/A')}/5.0
-최근 예약: {acc.get('recent_bookings', 0)}건
-가격 (1박):
-{price_text}
-조식: {meal_text}
-시설: {facilities_text}
-주변 명소:
-{attractions_text}
-""")
-                        
-                        # 맛집 데이터
-                        for rest in RESTAURANT_DATA:
-                            all_docs.append(f"""
-맛집: {rest.get('name', '이름 없음')}
-위치: {rest.get('location', '위치 정보 없음')}
-평점: {rest.get('rating', 'N/A')}
-영업시간: {rest.get('hours', '영업시간 정보 없음')}
-가격대: {rest.get('price_range', '가격 정보 없음')}
-주차: {'가능' if rest.get('parking', False) else '불가'}
-인기메뉴: {', '.join(rest.get('popular_dishes', []))}
-분위기: {rest.get('atmosphere', '정보 없음')}
-""")
-                        
-                        # 관광지 데이터
-                        for attr in ATTRACTION_DATA:
-                            all_docs.append(f"""
-관광지: {attr.get('name', '이름 없음')}
-위치: {attr.get('location', '위치 정보 없음')}
-평점: {attr.get('rating', 'N/A')}
-입장료: {attr.get('entry_fee', '정보 없음')}
-운영시간: {attr.get('hours', '운영시간 정보 없음')}
-소요시간: {attr.get('time_needed', '정보 없음')}
-계절추천: {', '.join(attr.get('best_seasons', []))}
-""")
-                        
-                        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-                        splits = text_splitter.create_documents(all_docs)
-                        vectorstore = Chroma.from_documents(documents=splits, embedding=embeddings)
-                        retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
-
-                        # 3. 컨텍스트 검색
+                        # 벡터 스토어에서 검색
+                        retriever = vectorstore.as_retriever(
+                            search_kwargs={"k": search_k}
+                        )
                         docs = retriever.get_relevant_documents(prompt)
                         context = "\n\n".join([doc.page_content for doc in docs])
+                        
+                        # 프롬프트 생성
+                        system_prompt = """당신은 강원도 관광 전문 AI 컨시어지입니다.
 
-                        # 4. 프롬프트 생성
-                        system_prompt = """당신은 강원도 관광 및 숙박 전문 AI 컨시어지입니다.
+**역할:**
+실제 방문객들의 네이버 리뷰를 분석하여 신뢰할 수 있는 여행 정보를 제공합니다.
 
-**설문 결과 반영 - 반드시 포함해야 할 정보:**
-1. 가격 정보 (가장 중요!)
-2. 위치 및 거리 정보
-3. 객실 타입 및 수용 인원
-4. 식사 포함 여부
-5. 주차 가능 여부
-6. 청결도 및 시설 정보
-7. 최근 예약 사례
+**답변 원칙:**
+1. 실제 리뷰 데이터에 기반한 객관적 정보 제공
+2. 재방문율이 높은 장소 우선 추천
+3. 긍정적/부정적 의견 균형있게 전달
+4. 구체적인 정보 포함 (위치, 가격, 영업시간 등)
+5. 리뷰에서 자주 언급되는 특징 강조
 
-**컨텍스트:**
+**컨텍스트 (실제 리뷰 데이터):**
 {context}
 
-**답변 가이드라인:**
-- 숙소 추천 시: 가격(필수), 위치, 객실 타입, 식사, 주차, 청결도 점수를 모두 포함
-- 맛집 추천 시: 가격대, 위치, 주차 정보, 운영 시간, 인기 메뉴 포함
-- 여행 코스: 동선을 고려한 효율적인 일정, 이동 거리와 시간 명시
-- 견적: 구체적인 금액과 항목별 비용 분석
-- 출처: 리뷰 데이터 또는 실제 예약 사례 기반임을 명시
+**답변 형식:**
+- 간결하고 명확하게
+- 필요시 장소별로 구분하여 설명
+- 리뷰 통계 정보 활용 (총 리뷰 수, 재방문율)
+- 실제 방문객 의견 요약 제공
 
-**응답 형식:**
-- 요청에 맞는 구체적 정보 제공
-- 가격은 반드시 명시 (예: 120,000원/박)
-- 거리는 km + 이동 시간 표시 (예: 5km, 차로 10분)
-- 신뢰도 향상을 위해 최근 예약 건수나 리뷰 점수 언급"""
+**주의사항:**
+- 리뷰에 없는 내용은 추측하지 않기
+- 가격, 영업시간 등은 리뷰에 명시된 경우만 언급
+- 최신 정보는 직접 확인 권장"""
 
                         prompt_template = ChatPromptTemplate.from_messages([
                             ("system", system_prompt),
@@ -603,190 +427,129 @@ with tab1:
                         ])
                         
                         chain = prompt_template | llm
-
-                        # 5. 대화 기록 준비
+                        
+                        # 대화 기록 준비
                         chat_history = []
                         for msg in st.session_state.messages:
                             if msg["role"] == "user":
                                 chat_history.append(HumanMessage(content=msg["content"]))
                             else:
                                 chat_history.append(AIMessage(content=msg["content"]))
-
-                        # 6. 🚀 st.write_stream을 사용하여 스트리밍 실행 (스피너는 여기서 사라짐)
-                        response_stream = chain.stream({"context": context, "messages": chat_history})
+                        
+                        # 스트리밍 실행
+                        response_stream = chain.stream({
+                            "context": context,
+                            "messages": chat_history
+                        })
                         full_response = st.write_stream(response_stream)
                         
-                        # 7. 스트리밍 완료 후 전체 응답을 세션 상태에 저장
-                        st.session_state.messages.append({"role": "assistant", "content": full_response})
+                        # 응답 저장
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": full_response
+                        })
                         
-                    except Exception as e:
-                        st.error(f"❌ 오류: {str(e)}")
-                        st.info("잠시 후 다시 시도해주세요.")
+                except Exception as e:
+                    st.error(f"❌ 오류: {str(e)}")
+                    st.info("잠시 후 다시 시도해주세요.")
 
 with tab2:
-    st.subheader("💰 여행 비용 견적 계산기")
-    st.info("💡 **설문 결과**: 가격 문의가 83%로 가장 많습니다. 자동 견적을 확인하세요!")
+    st.subheader("📊 리뷰 분석")
     
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        duration = st.selectbox("여행 기간", ["1박 2일", "2박 3일", "3박 4일"])
-        num_people = st.number_input("인원 수", 1, 10, 4)
-        acc_type = st.selectbox(
-            "숙박 등급",
-            ["budget", "standard", "luxury"],
-            format_func=lambda x: {"budget": "저렴 (8만원대)", "standard": "일반 (15만원대)", "luxury": "고급 (30만원대)"}[x]
-        )
-    
-    with col2:
-        if st.button("💵 견적 계산하기", use_container_width=True):
-            costs = calculate_trip_cost(duration, num_people, acc_type)
-            st.session_state.price_comparison = costs
-            
-            st.markdown(f"""
-            <div class='price-box'>
-            <h3>📊 예상 비용</h3>
-            <ul>
-            <li><strong>숙박비</strong>: {costs['accommodation']:,}원</li>
-            <li><strong>식비</strong>: {costs['meals']:,}원</li>
-            <li><strong>입장료</strong>: {costs['attractions']:,}원</li>
-            <li><strong>교통비</strong>: {costs['transportation']:,}원</li>
-            </ul>
-            <hr>
-            <h2>총 {costs['total']:,}원</h2>
-            <p>1인당 약 {costs['per_person']:,}원</p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            st.success("✅ 견적이 계산되었습니다!")
-
-with tab3:
-    st.subheader("📋 맞춤 일정표 자동 생성")
-    st.info("💡 **설문 결과**: 일정표 자동 작성이 59%로 가장 필요한 기능입니다!")
-    
-    package_choice = st.selectbox(
-        "패키지 선택",
-        range(len(PACKAGE_TEMPLATES)),
-        format_func=lambda x: PACKAGE_TEMPLATES[x]['name']
-    )
-    
-    if st.button("📄 일정표 생성", use_container_width=True):
-        package = PACKAGE_TEMPLATES[package_choice]
-        st.session_state.generated_itinerary = package
+    if not st.session_state.reviews_loaded:
+        st.warning("⚠️ 리뷰 데이터를 로딩하는 중입니다...")
+    else:
+        # 전체 통계
+        total_reviews = st.session_state.total_reviews
+        total_places = sum(len(set(r['place_name'] for r in reviews)) 
+                          for reviews in st.session_state.reviews_data.values())
         
-        itinerary_text = generate_itinerary_text(package)
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("총 리뷰", f"{total_reviews:,}개")
+        with col2:
+            st.metric("총 장소", f"{total_places}곳")
+        with col3:
+            st.metric("카테고리", f"{len(CATEGORIES)}개")
         
-        st.markdown(itinerary_text)
+        st.divider()
         
-        st.download_button(
-            label="📥 일정표 다운로드 (텍스트)",
-            data=itinerary_text,
-            file_name=f"{package['name']}_일정표.txt",
-            mime="text/plain",
-            use_container_width=True
+        # 카테고리 선택
+        category_choice = st.selectbox(
+            "카테고리 선택",
+            list(st.session_state.reviews_data.keys())
         )
         
-        st.success("✅ 일정표가 생성되었습니다!")
-
-with tab4:
-    st.subheader("🏨 숙소 실시간 검색")
-    st.info("💡 **설문 결과**: 가격, 위치, 객실 타입, 식사 정보가 필수입니다!")
-    
-    filtered_results = filter_accommodations(st.session_state.search_filters)
-    
-    st.write(f"**검색 결과: {len(filtered_results)}개**")
-    
-    for acc in filtered_results:
-        try:
-            rating = acc.get('rating', 'N/A')
-            name = acc.get('name', '이름 없음')
-            location = acc.get('location', '위치 정보 없음')
+        category_reviews = st.session_state.reviews_data[category_choice]
+        
+        if not category_reviews:
+            st.info("해당 카테고리에 리뷰 데이터가 없습니다.")
+        else:
+            # 장소별 통계 계산
+            place_stats = {}
+            for review in category_reviews:
+                place_name = review['place_name']
+                if place_name not in place_stats:
+                    place_stats[place_name] = {
+                        'total': 0,
+                        'revisit': 0,
+                        'recent_reviews': []
+                    }
+                place_stats[place_name]['total'] += 1
+                if '재방문' in review.get('revisit', '') or '번째' in review.get('revisit', ''):
+                    place_stats[place_name]['revisit'] += 1
+                place_stats[place_name]['recent_reviews'].append(review)
             
-            with st.expander(f"⭐ {rating} | {name} - {location}"):
-                col1, col2 = st.columns([2, 1])
-                
-                with col1:
-                    st.markdown(f"**📍 위치**: {location}")
-                    st.markdown(f"**🧹 청결도**: {acc.get('cleanliness_score', 'N/A')}/5.0")
-                    st.markdown(f"**📅 최근 예약**: {acc.get('recent_bookings', 0)}건")
-                    
-                    st.markdown("**💰 가격 (1박 기준)**")
-                    price_per_night = acc.get('price_per_night', {})
-                    for room_type, price in price_per_night.items():
-                        st.write(f"  - {room_type}: {price:,}원")
-                    
-                    meals = acc.get('meals', {})
-                    breakfast_text = '포함 (뷔페)' if meals.get('breakfast_included', False) else f'별도 ({meals.get("breakfast_price", 0):,}원)'
-                    st.markdown(f"**🍽️ 조식**: {breakfast_text}")
-                    
-                    facilities = acc.get('facilities', [])
-                    st.markdown(f"**🎯 시설**: {', '.join(facilities[:5])}")
-                    
-                with col2:
-                    st.markdown("**🚗 주변 명소**")
-                    attractions = acc.get('distance_to_attractions', {})
-                    for place, dist in list(attractions.items())[:3]:
-                        st.write(f"{place}: {dist}")
-        except Exception as e:
-            st.error(f"숙소 정보 표시 오류: {str(e)}")
-
-with tab5:
-    st.subheader("📊 숙소 가격 비교")
-    st.info("💡 **설문 결과**: 신뢰를 위해 가격 비교 정보가 중요합니다!")
-    
-    # 지역별 가격 비교
-    regions = {}
-    for acc in ACCOMMODATION_DATA:
-        try:
-            location = acc.get('location', '정보 없음')
-            location_key = location.split()[0] if location else '기타'
-            if location_key not in regions:
-                regions[location_key] = []
+            # 재방문율 계산 및 정렬
+            for place_name, stats in place_stats.items():
+                stats['revisit_rate'] = (stats['revisit'] / stats['total'] * 100) if stats['total'] > 0 else 0
             
-            price_per_night = acc.get('price_per_night', {})
-            if not price_per_night:
-                continue
-                
-            min_price = min(price_per_night.values())
-            regions[location_key].append({
-                "name": acc.get('name', '이름 없음'),
-                "min_price": min_price,
-                "rating": acc.get('rating', 'N/A')
-            })
-        except Exception as e:
-            continue
-    
-    for region, accs in regions.items():
-        st.markdown(f"### 📍 {region}")
-        for acc in sorted(accs, key=lambda x: x['min_price']):
-            st.write(f"- **{acc['name']}**: {acc['min_price']:,}원/박 (평점 {acc['rating']})")
-    
-    st.divider()
-    
-    # 객실 타입별 가격
-    st.markdown("### 🛏️ 객실 타입별 평균 가격")
-    room_type_prices = {}
-    for acc in ACCOMMODATION_DATA:
-        try:
-            price_per_night = acc.get('price_per_night', {})
-            for room_type, price in price_per_night.items():
-                if room_type not in room_type_prices:
-                    room_type_prices[room_type] = []
-                room_type_prices[room_type].append(price)
-        except Exception as e:
-            continue
-    
-    for room_type, prices in room_type_prices.items():
-        if prices:
-            avg_price = sum(prices) / len(prices)
-            st.write(f"- **{room_type}**: 평균 {avg_price:,.0f}원 (최저 {min(prices):,}원 ~ 최고 {max(prices):,}원)")
+            sorted_places = sorted(place_stats.items(), 
+                                 key=lambda x: (x[1]['revisit_rate'], x[1]['total']), 
+                                 reverse=True)
+            
+            # 카테고리 통계
+            st.markdown(f"### 📊 {category_choice} 통계")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("장소 수", f"{len(sorted_places)}곳")
+            with col2:
+                st.metric("리뷰 수", f"{len(category_reviews):,}개")
+            
+            st.divider()
+            
+            # TOP 10 장소 (재방문율 순)
+            st.markdown("### 🏆 재방문율 높은 TOP 10")
+            
+            for idx, (place_name, stats) in enumerate(sorted_places[:10], 1):
+                with st.expander(
+                    f"{idx}. {place_name} - 재방문율 {stats['revisit_rate']:.1f}% (리뷰 {stats['total']}개)"
+                ):
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("총 리뷰", f"{stats['total']}개")
+                    with col2:
+                        st.metric("재방문 리뷰", f"{stats['revisit']}개")
+                    with col3:
+                        st.metric("재방문율", f"{stats['revisit_rate']:.1f}%")
+                    
+                    # 최근 리뷰 3개
+                    st.markdown("**최근 리뷰:**")
+                    for review in stats['recent_reviews'][:3]:
+                        content = review.get('content', '')[:150]
+                        revisit_info = f" ({review.get('revisit', '')})" if review.get('revisit') else ""
+                        st.write(f"• `{review.get('date', '')}` {review.get('nickname', '익명')}{revisit_info}")
+                        st.caption(f"{content}...")
 
+# ============================================
 # 푸터
+# ============================================
+
 st.divider()
 st.markdown("""
 <div style='text-align: center; padding: 20px; background-color: #f8f9fa; border-radius: 10px;'>
-    <h4>🎯 설문 기반 고도화 기능</h4>
-    <p>✅ 가격 정보 우선 제공 | ✅ 일정표 자동 생성 | ✅ 지역별 필터링 | ✅ 가격 비교 | ✅ 최근 예약 사례</p>
-    <p style='color: gray; margin-top: 10px;'>강원대학교 학생창의자율과제 7팀 | Powered by LangGraph & OpenAI</p>
+    <h4>🎯 네이버 리뷰 기반 AI 컨시어지</h4>
+    <p>✅ 실제 방문객 리뷰 분석 | ✅ Streamlit Cloud 최적화 | ✅ 빠른 응답</p>
+    <p style='color: gray; margin-top: 10px;'>강원대학교 학생창의자율과제 7팀 | Powered by LangChain & OpenAI</p>
 </div>
 """, unsafe_allow_html=True)
