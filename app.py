@@ -467,6 +467,10 @@ st.markdown("""
 <div class='info-banner'>
     <h1>🏔️ 강원도 관광 AI 컨시어지</h1>
     <p>실제 리뷰 기반 · 일정 자동 생성 · 맞춤 추천 · 가격 비교</p>
+    <p style='font-size: 0.9em; margin-top: 10px; opacity: 0.9;'>
+        📍 현재 <strong>춘천 지역</strong> 데이터 제공 중 | 
+        🚀 강원도 전체 지역으로 확대 예정
+    </p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -478,9 +482,15 @@ with st.sidebar:
     st.title("⚙️ 설정")
     
     if API_KEY:
-        st.success("✅ API 키 설정됨")
+        # API 키 검증
+        if API_KEY.startswith('sk-'):
+            st.success("✅ OpenAI API 키 설정됨")
+        else:
+            st.error("⚠️ OpenAI API 키 형식 오류")
+            st.caption("'sk-'로 시작해야 합니다")
     else:
-        st.error("⚠️ API 키 필요")
+        st.error("⚠️ OpenAI API 키 필요")
+        st.caption("Streamlit Secrets에 OPENAI_API_KEY 설정")
     
     st.divider()
     
@@ -501,19 +511,29 @@ with st.sidebar:
     # 통계
     if st.session_state.reviews_loaded:
         st.subheader("📊 데이터")
+        st.info("📍 **현재: 춘천 지역**")
         total = sum(len(r) for r in st.session_state.reviews_data.values())
         places = len(st.session_state.place_analysis)
         st.metric("총 리뷰", f"{total:,}개")
         st.metric("장소 수", f"{places}곳")
+        st.caption("🚀 강원도 전체로 확대 예정")
     
     st.divider()
     
     # AI 설정
     st.subheader("🤖 AI 설정")
+    
+    st.caption("💡 **모델 선택 가이드**")
+    st.markdown("""
+    - **gpt-4o-mini**: 🎯 빠르고 효율적 (균형 잡힌 선택)
+    - **gpt-5-nano**: 🧠 추론 기반 (복잡한 계획/비교)
+    """)
+    
     model_choice = st.selectbox(
-        "모델", 
+        "모델 선택", 
         ["gpt-4o-mini", "gpt-5-nano"],
-        index=0
+        index=0,
+        help="gpt-4o-mini 권장: 빠르고 정확한 균형"
     )
     temperature = st.slider("창의성", 0.0, 1.0, 0.7, 0.1)
     search_k = st.slider("검색 결과", 3, 10, 5, 1)
@@ -612,7 +632,32 @@ with tab1:
                         })
                         
                 except Exception as e:
-                    st.error(f"❌ 오류: {str(e)}")
+                    error_msg = str(e)
+                    st.error(f"❌ 오류 발생")
+                    
+                    if "invalid model" in error_msg.lower():
+                        st.error(f"""
+**모델 오류**
+- 사용 중인 모델: {model_choice}
+- OpenAI API 키가 맞는지 확인하세요
+- 사이드바에서 다른 모델 시도: gpt-3.5-turbo (권장)
+                        """)
+                    elif "api key" in error_msg.lower():
+                        st.error("""
+**API 키 오류**
+- Streamlit Secrets에 OPENAI_API_KEY 설정 필요
+- 형식: sk-... 로 시작
+- OpenAI 계정에서 API 키 확인
+                        """)
+                    elif "rate limit" in error_msg.lower():
+                        st.error("""
+**요청 한도 초과**
+- 잠시 후 다시 시도하세요
+- 또는 API 키의 사용량 확인
+                        """)
+                    else:
+                        st.error(f"상세 오류: {error_msg}")
+                        st.caption("💡 gpt-3.5-turbo 모델로 변경해보세요 (사이드바)")
 
 # TAB 2: 일정 생성기
 with tab2:
@@ -861,6 +906,10 @@ st.markdown("""
 <div style='text-align: center; padding: 20px; background-color: #f8f9fa; border-radius: 10px;'>
     <h4>🎯 설문 기반 실용 기능</h4>
     <p>✅ 리뷰 기반 추천 | ✅ 자동 일정 생성 | ✅ 장소 비교 | ✅ TOP 순위 | ✅ 통계 분석</p>
+    <p style='margin-top: 15px; padding-top: 15px; border-top: 1px solid #ddd;'>
+        📍 <strong>현재 제공 지역:</strong> 춘천<br>
+        🚀 <strong>확대 예정:</strong> 강릉, 속초, 평창, 원주 등 강원도 전역
+    </p>
     <p style='color: gray; margin-top: 10px;'>강원대학교 학생창의자율과제 7팀</p>
 </div>
 """, unsafe_allow_html=True)
