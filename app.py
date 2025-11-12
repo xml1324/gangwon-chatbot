@@ -2,12 +2,14 @@ import streamlit as st
 import os
 import pandas as pd
 import glob
-from typing import Dict, List
+from typing import Dict, List, Tuple
+from collections import Counter
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+import re
 
 # 페이지 설정
 st.set_page_config(
@@ -18,24 +20,19 @@ st.set_page_config(
 )
 
 # ============================================
-# 설정 및 경로 (Streamlit Cloud용)
+# 설정 및 경로
 # ============================================
 
-REVIEWS_BASE_PATH = "리뷰"  # GitHub 저장소의 리뷰 폴더
+REVIEWS_BASE_PATH = "리뷰"
 CATEGORIES = ['맛집 리뷰', '명소 리뷰', '병원 리뷰', '카페 리뷰']
 
 # ============================================
-# 네이버 리뷰 데이터 로딩 함수
+# 네이버 리뷰 데이터 로딩
 # ============================================
 
 @st.cache_data(show_spinner=False)
 def load_naver_reviews(base_path: str = REVIEWS_BASE_PATH) -> tuple:
-    """
-    4개 카테고리 폴더에서 모든 네이버 리뷰 엑셀 파일을 읽어옵니다.
-    
-    Returns:
-        (reviews_data, total_reviews) 튜플
-    """
+    """네이버 리뷰 데이터 로딩"""
     all_reviews = {}
     total_reviews = 0
     
@@ -44,24 +41,18 @@ def load_naver_reviews(base_path: str = REVIEWS_BASE_PATH) -> tuple:
         category_reviews = []
         
         if not os.path.exists(category_path):
-            st.warning(f"⚠️ '{category}' 폴더를 찾을 수 없습니다: {category_path}")
             all_reviews[category] = []
             continue
         
-        # 폴더 내의 모든 엑셀 파일 찾기
         excel_files = glob.glob(os.path.join(category_path, "*.xlsx"))
         excel_files.extend(glob.glob(os.path.join(category_path, "*.xls")))
         
-        # 각 엑셀 파일 읽기
         for file_path in excel_files:
             try:
                 df = pd.read_excel(file_path)
-                
-                # 파일명에서 장소명 추출
                 file_name = os.path.basename(file_path)
                 place_name = file_name.replace('naver_review_', '').replace('.xlsx', '').replace('.xls', '').replace('_', ' ')
                 
-                # 각 리뷰를 딕셔너리로 변환
                 for _, row in df.iterrows():
                     review = {
                         'category': category,
@@ -70,18 +61,14 @@ def load_naver_reviews(base_path: str = REVIEWS_BASE_PATH) -> tuple:
                         'nickname': str(row.get('nickname', '익명')),
                         'content': str(row.get('content', '')),
                         'revisit': str(row.get('revisit', '')),
-                        'reply_date': str(row.get('reply_date', '')) if pd.notna(row.get('reply_date')) else '',
-                        'reply_txt': str(row.get('reply_txt', '')) if pd.notna(row.get('reply_txt')) else '',
                         'file_source': file_name
                     }
                     
-                    # 내용이 있는 리뷰만 추가
                     if review['content'] and review['content'] != 'nan':
                         category_reviews.append(review)
                         total_reviews += 1
                 
             except Exception as e:
-                st.error(f"❌ 파일 로딩 실패: {file_path} - {str(e)}")
                 continue
         
         all_reviews[category] = category_reviews
@@ -89,58 +76,145 @@ def load_naver_reviews(base_path: str = REVIEWS_BASE_PATH) -> tuple:
     return all_reviews, total_reviews
 
 
-def prepare_review_documents(reviews_data: Dict[str, List[Dict]]) -> List[str]:
-    """
-    네이버 리뷰 데이터를 RAG용 문서로 변환합니다.
-    """
-    documents = []
+# ============================================
+# 리뷰 분석 함수들
+# ============================================
+
+@st.cache_data
+def analyze_reviews_by_place(reviews_data: Dict[str, List[Dict]]) -> Dict:
+    """장소별 리뷰 분석"""
+    place_analysis = {}
     
     for category, reviews in reviews_data.items():
-        # 장소별로 리뷰 그룹화
-        place_reviews = {}
         for review in reviews:
             place_name = review['place_name']
-            if place_name not in place_reviews:
-                place_reviews[place_name] = []
-            place_reviews[place_name].append(review)
+            if place_name not in place_analysis:
+                place_analysis[place_name] = {
+                    'category': category,
+                    'total_reviews': 0,
+                    'revisit_count': 0,
+                    'keywords': [],
+                    'recent_reviews': [],
+                    'positive_count': 0,
+                    'negative_count': 0
+                }
+            
+            place_analysis[place_name]['total_reviews'] += 1
+            place_analysis[place_name]['recent_reviews'].append(review)
+            
+            # 재방문 확인
+            if '재방문' in review.get('revisit', '') or '번째' in review.get('revisit', ''):
+                place_analysis[place_name]['revisit_count'] += 1
+            
+            # 키워드 추출
+            content = review.get('content', '')
+            positive_keywords = ['맛있', '좋', '추천', '최고', '훌륭', '친절', '깨끗', '만족', '재방문']
+            negative_keywords = ['별로', '아쉽', '실망', '불친절', '더럽', '비싸', '맛없']
+            
+            for keyword in positive_keywords:
+                if keyword in content:
+                    place_analysis[place_name]['positive_count'] += 1
+                    break
+            
+            for keyword in negative_keywords:
+                if keyword in content:
+                    place_analysis[place_name]['negative_count'] += 1
+                    break
+    
+    # 재방문율 계산
+    for place_name, data in place_analysis.items():
+        if data['total_reviews'] > 0:
+            data['revisit_rate'] = (data['revisit_count'] / data['total_reviews']) * 100
+            data['positive_rate'] = (data['positive_count'] / data['total_reviews']) * 100
+        else:
+            data['revisit_rate'] = 0
+            data['positive_rate'] = 0
         
-        # 각 장소에 대한 문서 생성
-        for place_name, place_review_list in place_reviews.items():
-            total_reviews = len(place_review_list)
-            revisit_count = sum(1 for r in place_review_list if '재방문' in r.get('revisit', '') or '번째' in r.get('revisit', ''))
-            revisit_rate = (revisit_count / total_reviews * 100) if total_reviews > 0 else 0
-            
-            # 긍정적 키워드 카운트
-            positive_keywords = ['맛있', '좋', '추천', '최고', '훌륭', '친절', '깨끗', '만족']
-            positive_count = sum(1 for r in place_review_list 
-                                for keyword in positive_keywords 
-                                if keyword in r.get('content', ''))
-            
-            # 대표 리뷰 선택 (긴 리뷰 우선, 최대 10개)
-            sorted_reviews = sorted(place_review_list, key=lambda x: len(x.get('content', '')), reverse=True)
-            top_reviews = sorted_reviews[:10]
-            
-            # 문서 생성
-            doc = f"""
-카테고리: {category}
-장소명: {place_name}
+        # 최근 리뷰만 유지
+        data['recent_reviews'] = data['recent_reviews'][:3]
+    
+    return place_analysis
 
-[통계 정보]
-- 총 리뷰 수: {total_reviews}개
-- 재방문 리뷰: {revisit_count}개 ({revisit_rate:.1f}%)
-- 긍정 평가: {positive_count}회 언급
 
-[주요 리뷰 내용]
+def extract_price_mentions(content: str) -> List[str]:
+    """리뷰에서 가격 언급 추출"""
+    price_patterns = [
+        r'(\d+)만원',
+        r'(\d+),(\d+)원',
+        r'(\d+)천원'
+    ]
+    
+    prices = []
+    for pattern in price_patterns:
+        matches = re.findall(pattern, content)
+        if matches:
+            prices.extend([str(m) for m in matches])
+    
+    return prices
+
+
+def get_top_places(place_analysis: Dict, category: str = None, 
+                   sort_by: str = 'revisit_rate', limit: int = 10) -> List[Tuple]:
+    """상위 장소 추출"""
+    filtered = place_analysis
+    
+    if category:
+        filtered = {k: v for k, v in place_analysis.items() 
+                   if v['category'] == category}
+    
+    # 최소 리뷰 수 필터링 (신뢰도)
+    filtered = {k: v for k, v in filtered.items() 
+               if v['total_reviews'] >= 3}
+    
+    sorted_places = sorted(
+        filtered.items(),
+        key=lambda x: x[1].get(sort_by, 0),
+        reverse=True
+    )
+    
+    return sorted_places[:limit]
+
+
+# ============================================
+# 토큰 최적화된 RAG 문서 준비
+# ============================================
+
+def prepare_review_documents_optimized(
+    reviews_data: Dict[str, List[Dict]], 
+    user_query: str = ""
+) -> List[str]:
+    """
+    토큰 최적화: 사용자 쿼리와 관련성 높은 장소만 선택
+    """
+    documents = []
+    place_analysis = analyze_reviews_by_place(reviews_data)
+    
+    # 쿼리 키워드 추출
+    query_keywords = ['재방문', '맛집', '명소', '카페', '병원', '추천', '좋은', '인기']
+    
+    # 카테고리 필터링
+    target_categories = CATEGORIES
+    if '맛집' in user_query or '음식' in user_query or '먹' in user_query:
+        target_categories = ['맛집 리뷰']
+    elif '명소' in user_query or '관광' in user_query or '구경' in user_query:
+        target_categories = ['명소 리뷰']
+    elif '카페' in user_query or '커피' in user_query:
+        target_categories = ['카페 리뷰']
+    
+    # 상위 장소만 선택 (토큰 절약)
+    for category in target_categories:
+        top_places = get_top_places(place_analysis, category, 'revisit_rate', limit=15)
+        
+        for place_name, stats in top_places:
+            # 간결한 문서 생성
+            doc = f"""{category.replace(' 리뷰', '')} | {place_name}
+리뷰:{stats['total_reviews']}개 재방문율:{stats['revisit_rate']:.0f}% 긍정:{stats['positive_rate']:.0f}%
+
+주요리뷰:
 """
-            for idx, review in enumerate(top_reviews, 1):
-                content = review.get('content', '')[:400]
-                doc += f"\n리뷰 #{idx}\n"
-                doc += f"작성일: {review.get('date', '')}\n"
-                doc += f"작성자: {review.get('nickname', '익명')}\n"
-                if review.get('revisit'):
-                    doc += f"방문: {review['revisit']}\n"
-                doc += f"내용: {content}\n"
-                doc += "-" * 40 + "\n"
+            for idx, review in enumerate(stats['recent_reviews'][:2], 1):  # 2개만
+                content = review.get('content', '')[:150]  # 150자로 제한
+                doc += f"{idx}.{content}\n"
             
             documents.append(doc)
     
@@ -148,44 +222,131 @@ def prepare_review_documents(reviews_data: Dict[str, List[Dict]]) -> List[str]:
 
 
 # ============================================
-# 벡터 스토어 관리 (Streamlit Cloud용 - 메모리 캐싱)
+# 벡터 스토어 (토큰 최적화)
 # ============================================
 
 @st.cache_resource(show_spinner=False)
-def create_vector_store(reviews_data: Dict[str, List[Dict]], _api_key: str):
-    """
-    리뷰 데이터로부터 벡터 스토어를 생성합니다.
-    Streamlit Cloud에서는 메모리에 캐싱되어 앱 재시작 전까지 유지됩니다.
-    """
-    # 문서 준비
-    documents = prepare_review_documents(reviews_data)
+def create_vector_store_optimized(reviews_data: Dict[str, List[Dict]], _api_key: str):
+    """토큰 최적화된 벡터 스토어 생성"""
+    # 문서 준비 (쿼리 없이 전체 데이터의 대표 샘플만)
+    documents = prepare_review_documents_optimized(reviews_data)
     
-    # 텍스트 분할
+    # 작은 청크로 분할
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200
+        chunk_size=500,  # 더 작게
+        chunk_overlap=50
     )
     splits = text_splitter.create_documents(documents)
     
-    # 임베딩 및 벡터 스토어 생성
+    # 임베딩
     embeddings = OpenAIEmbeddings(api_key=_api_key)
+    
+    # 배치 처리
+    batch_size = 30
+    first_batch = splits[:batch_size]
     vectorstore = Chroma.from_documents(
-        documents=splits,
+        documents=first_batch,
         embedding=embeddings
     )
+    
+    # 나머지 배치
+    for i in range(1, len(splits) // batch_size + 1):
+        start_idx = i * batch_size
+        end_idx = min((i + 1) * batch_size, len(splits))
+        batch = splits[start_idx:end_idx]
+        if batch:
+            vectorstore.add_documents(batch)
     
     return vectorstore
 
 
 # ============================================
-# API 키 관리 (Streamlit Cloud Secrets 사용)
+# 일정 생성 함수
+# ============================================
+
+def generate_itinerary(
+    place_analysis: Dict,
+    duration: str = "1박 2일",
+    categories: List[str] = None,
+    priorities: str = "재방문율"
+) -> Dict:
+    """리뷰 기반 일정 생성"""
+    nights = int(duration[0]) if duration else 1
+    days = nights + 1
+    
+    if not categories:
+        categories = ['맛집 리뷰', '명소 리뷰', '카페 리뷰']
+    
+    sort_key = 'revisit_rate' if priorities == '재방문율' else 'positive_rate'
+    
+    itinerary = {'duration': duration, 'days': []}
+    
+    for day in range(1, days + 1):
+        day_plan = {'day': day, 'activities': []}
+        
+        # 아침 - 카페 (1일차 제외)
+        if day > 1 and '카페 리뷰' in categories:
+            cafe = get_top_places(place_analysis, '카페 리뷰', sort_key, limit=day)[day-1]
+            day_plan['activities'].append({
+                'time': '09:00',
+                'type': '카페',
+                'place': cafe[0],
+                'stats': cafe[1]
+            })
+        
+        # 오전 - 명소
+        if '명소 리뷰' in categories:
+            attraction = get_top_places(place_analysis, '명소 리뷰', sort_key, limit=day)[day-1]
+            day_plan['activities'].append({
+                'time': '10:30' if day > 1 else '10:00',
+                'type': '명소',
+                'place': attraction[0],
+                'stats': attraction[1]
+            })
+        
+        # 점심 - 맛집
+        if '맛집 리뷰' in categories:
+            restaurant_lunch = get_top_places(place_analysis, '맛집 리뷰', sort_key, limit=day*2)[day*2-2]
+            day_plan['activities'].append({
+                'time': '12:30',
+                'type': '맛집',
+                'place': restaurant_lunch[0],
+                'stats': restaurant_lunch[1]
+            })
+        
+        # 오후 - 명소 또는 카페
+        if day < days and '명소 리뷰' in categories:
+            attraction2 = get_top_places(place_analysis, '명소 리뷰', sort_key, limit=day+3)[day]
+            day_plan['activities'].append({
+                'time': '14:30',
+                'type': '명소',
+                'place': attraction2[0],
+                'stats': attraction2[1]
+            })
+        
+        # 저녁 - 맛집
+        if '맛집 리뷰' in categories:
+            restaurant_dinner = get_top_places(place_analysis, '맛집 리뷰', sort_key, limit=day*2)[day*2-1]
+            day_plan['activities'].append({
+                'time': '18:00',
+                'type': '맛집',
+                'place': restaurant_dinner[0],
+                'stats': restaurant_dinner[1]
+            })
+        
+        itinerary['days'].append(day_plan)
+    
+    return itinerary
+
+
+# ============================================
+# API 키 관리
 # ============================================
 
 def get_api_key():
-    """Streamlit Cloud Secrets에서 API 키 가져오기"""
     try:
         return st.secrets["OPENAI_API_KEY"]
-    except Exception as e:
+    except:
         return None
 
 
@@ -199,42 +360,36 @@ if "reviews_loaded" not in st.session_state:
     st.session_state.reviews_loaded = False
 if "reviews_data" not in st.session_state:
     st.session_state.reviews_data = {}
-if "total_reviews" not in st.session_state:
-    st.session_state.total_reviews = 0
+if "place_analysis" not in st.session_state:
+    st.session_state.place_analysis = {}
 
-# API 키 확인
 API_KEY = get_api_key()
 
 # ============================================
-# 커스텀 CSS
+# CSS
 # ============================================
 
 st.markdown("""
 <style>
-.stButton>button {
-    width: 100%;
-}
+.stButton>button {width: 100%;}
 .info-banner {
     background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    padding: 20px;
-    border-radius: 10px;
-    margin-bottom: 20px;
-    text-align: center;
+    color: white; padding: 20px; border-radius: 10px;
+    margin-bottom: 20px; text-align: center;
 }
-.metric-card {
-    background-color: #f8f9fa;
-    padding: 15px;
-    border-radius: 8px;
-    border-left: 4px solid #667eea;
-    margin: 10px 0;
+.place-card {
+    border: 1px solid #e0e0e0; padding: 15px;
+    border-radius: 8px; margin: 10px 0;
+    background: white;
 }
-.cache-info {
-    background-color: #e8f4f8;
-    padding: 15px;
-    border-radius: 8px;
-    border-left: 4px solid #2196F3;
+.metric-badge {
+    display: inline-block; padding: 5px 10px;
+    border-radius: 5px; margin: 5px;
+    font-size: 0.9em; font-weight: bold;
 }
+.high {background: #4CAF50; color: white;}
+.medium {background: #FFC107; color: black;}
+.low {background: #f44336; color: white;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -245,7 +400,7 @@ st.markdown("""
 st.markdown("""
 <div class='info-banner'>
     <h1>🏔️ 강원도 관광 AI 컨시어지</h1>
-    <p>네이버 리뷰 기반 · 실시간 답변 · Streamlit Cloud 최적화</p>
+    <p>실제 리뷰 기반 · 일정 자동 생성 · 맞춤 추천 · 가격 비교</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -256,130 +411,89 @@ st.markdown("""
 with st.sidebar:
     st.title("⚙️ 설정")
     
-    # API 키 상태 표시
     if API_KEY:
-        st.success("✅ API 키가 설정되었습니다")
+        st.success("✅ API 키 설정됨")
     else:
-        st.error("⚠️ API 키가 필요합니다")
-        st.info("""
-        **Streamlit Cloud에서 API 키 설정:**
-        
-        1. 앱 대시보드 → Settings
-        2. Secrets 섹션 클릭
-        3. 아래 내용 입력:
-        ```
-        OPENAI_API_KEY = "sk-your-key-here"
-        ```
-        4. Save 클릭
-        """)
+        st.error("⚠️ API 키 필요")
     
     st.divider()
     
     # 리뷰 데이터 자동 로딩
     if not st.session_state.reviews_loaded:
-        with st.spinner("📂 리뷰 데이터 로딩 중..."):
+        with st.spinner("📂 리뷰 데이터 로딩..."):
             try:
                 reviews_data, total_reviews = load_naver_reviews(REVIEWS_BASE_PATH)
                 
-                if total_reviews == 0:
-                    st.error(f"❌ 리뷰 데이터를 찾을 수 없습니다.")
-                    st.info(f"GitHub 저장소의 '{REVIEWS_BASE_PATH}' 폴더를 확인해주세요.")
-                else:
+                if total_reviews > 0:
                     st.session_state.reviews_data = reviews_data
-                    st.session_state.total_reviews = total_reviews
+                    st.session_state.place_analysis = analyze_reviews_by_place(reviews_data)
                     st.session_state.reviews_loaded = True
-                    st.success(f"✅ {total_reviews:,}개의 리뷰를 로딩했습니다!")
-                    
+                    st.success(f"✅ {total_reviews:,}개 리뷰 로딩!")
             except Exception as e:
-                st.error(f"❌ 리뷰 로딩 실패: {str(e)}")
+                st.error(f"❌ 로딩 실패: {str(e)}")
     
-    # 리뷰 데이터 통계
+    # 통계
     if st.session_state.reviews_loaded:
-        st.subheader("📊 리뷰 데이터")
-        st.metric("총 리뷰", f"{st.session_state.total_reviews:,}개")
-        
-        with st.expander("카테고리별 상세"):
-            for category, reviews in st.session_state.reviews_data.items():
-                if reviews:
-                    st.write(f"**{category}**: {len(reviews):,}개")
+        st.subheader("📊 데이터")
+        total = sum(len(r) for r in st.session_state.reviews_data.values())
+        places = len(st.session_state.place_analysis)
+        st.metric("총 리뷰", f"{total:,}개")
+        st.metric("장소 수", f"{places}곳")
     
     st.divider()
     
-    # 모델 설정
-    st.subheader("🤖 AI 모델 설정")
+    # AI 설정
+    st.subheader("🤖 AI 설정")
     model_choice = st.selectbox(
-        "모델",
-        ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"],
-        index=0,
-        help="gpt-4o-mini 권장"
+        "모델", 
+        ["gpt-4o-mini", "gpt-4o"],
+        index=0
     )
-    
-    temperature = st.slider(
-        "창의성",
-        0.0, 1.0, 0.7, 0.1,
-        help="낮을수록 일관적, 높을수록 창의적"
-    )
-    
-    search_k = st.slider(
-        "검색 결과 수",
-        3, 15, 8, 1,
-        help="더 많은 관련 문서 검색"
-    )
-    
-    st.divider()
-    
-    # 캐싱 정보
-    st.markdown("""
-    <div class='cache-info'>
-    <strong>💡 Streamlit Cloud 캐싱</strong><br>
-    벡터 스토어가 메모리에 캐싱되어<br>
-    앱 재시작 전까지 빠르게 사용됩니다.
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.divider()
-    st.caption("강원대학교 학생창의자율과제 7팀")
+    temperature = st.slider("창의성", 0.0, 1.0, 0.7, 0.1)
+    search_k = st.slider("검색 결과", 3, 10, 5, 1)
 
 # ============================================
 # 메인 탭
 # ============================================
 
-tab1, tab2 = st.tabs(["💬 AI 챗봇", "📊 리뷰 분석"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "💬 AI 챗봇",
+    "📋 일정 생성기", 
+    "🏆 TOP 추천",
+    "📊 비교 분석",
+    "⭐ 리뷰 통계"
+])
 
+# TAB 1: AI 챗봇
 with tab1:
     st.subheader("💬 AI 관광 컨시어지")
     
     if not st.session_state.reviews_loaded:
-        st.warning("⚠️ 리뷰 데이터를 로딩하는 중입니다...")
+        st.warning("⚠️ 리뷰 데이터 로딩 중...")
     elif not API_KEY:
-        st.error("⚠️ API 키를 설정해주세요. (사이드바 참고)")
+        st.error("⚠️ API 키를 설정해주세요")
     else:
-        st.info("💡 실제 방문객 리뷰를 기반으로 답변합니다!")
+        st.info("💡 실제 리뷰를 기반으로 답변합니다!")
         
-        # 대화 히스토리 표시
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
         
-        # 사용자 입력
-        if prompt := st.chat_input("예: 춘천에서 재방문율 높은 맛집 추천해줘"):
-            # 사용자 메시지 추가
+        if prompt := st.chat_input("예: 재방문율 높은 춘천 맛집 추천해줘"):
             st.session_state.messages.append({"role": "user", "content": prompt})
             
             with st.chat_message("user"):
                 st.markdown(prompt)
             
-            # AI 응답 생성
             with st.chat_message("assistant"):
                 try:
-                    with st.spinner("🤔 답변 생성 중..."):
-                        # 벡터 스토어 생성 또는 로드 (캐싱됨)
-                        vectorstore = create_vector_store(
+                    with st.spinner("🔄 데이터 준비 중..."):
+                        vectorstore = create_vector_store_optimized(
                             st.session_state.reviews_data,
                             API_KEY
                         )
-                        
-                        # LLM 초기화
+                    
+                    with st.spinner("🤔 답변 생성 중..."):
                         llm = ChatOpenAI(
                             model=model_choice,
                             temperature=temperature,
@@ -387,39 +501,24 @@ with tab1:
                             streaming=True
                         )
                         
-                        # 벡터 스토어에서 검색
-                        retriever = vectorstore.as_retriever(
-                            search_kwargs={"k": search_k}
-                        )
+                        retriever = vectorstore.as_retriever(search_kwargs={"k": search_k})
                         docs = retriever.get_relevant_documents(prompt)
                         context = "\n\n".join([doc.page_content for doc in docs])
                         
-                        # 프롬프트 생성
-                        system_prompt = """당신은 강원도 관광 전문 AI 컨시어지입니다.
+                        system_prompt = """강원도 관광 AI 컨시어지입니다.
 
-**역할:**
-실제 방문객들의 네이버 리뷰를 분석하여 신뢰할 수 있는 여행 정보를 제공합니다.
+**역할**: 실제 방문객 리뷰 기반 신뢰할 수 있는 정보 제공
 
-**답변 원칙:**
-1. 실제 리뷰 데이터에 기반한 객관적 정보 제공
-2. 재방문율이 높은 장소 우선 추천
-3. 긍정적/부정적 의견 균형있게 전달
-4. 구체적인 정보 포함 (위치, 가격, 영업시간 등)
-5. 리뷰에서 자주 언급되는 특징 강조
+**답변 원칙**:
+1. 재방문율과 긍정 평가 높은 장소 우선 추천
+2. 리뷰 통계 명시 (총 리뷰 수, 재방문율, 긍정률)
+3. 실제 방문객 의견 요약
+4. 간결하고 명확하게
 
-**컨텍스트 (실제 리뷰 데이터):**
+**컨텍스트**:
 {context}
 
-**답변 형식:**
-- 간결하고 명확하게
-- 필요시 장소별로 구분하여 설명
-- 리뷰 통계 정보 활용 (총 리뷰 수, 재방문율)
-- 실제 방문객 의견 요약 제공
-
-**주의사항:**
-- 리뷰에 없는 내용은 추측하지 않기
-- 가격, 영업시간 등은 리뷰에 명시된 경우만 언급
-- 최신 정보는 직접 확인 권장"""
+**형식**: 장소명, 통계, 특징을 포함하여 간결하게 작성"""
 
                         prompt_template = ChatPromptTemplate.from_messages([
                             ("system", system_prompt),
@@ -428,7 +527,6 @@ with tab1:
                         
                         chain = prompt_template | llm
                         
-                        # 대화 기록 준비
                         chat_history = []
                         for msg in st.session_state.messages:
                             if msg["role"] == "user":
@@ -436,14 +534,12 @@ with tab1:
                             else:
                                 chat_history.append(AIMessage(content=msg["content"]))
                         
-                        # 스트리밍 실행
                         response_stream = chain.stream({
                             "context": context,
                             "messages": chat_history
                         })
                         full_response = st.write_stream(response_stream)
                         
-                        # 응답 저장
                         st.session_state.messages.append({
                             "role": "assistant",
                             "content": full_response
@@ -451,18 +547,205 @@ with tab1:
                         
                 except Exception as e:
                     st.error(f"❌ 오류: {str(e)}")
-                    st.info("잠시 후 다시 시도해주세요.")
 
+# TAB 2: 일정 생성기
 with tab2:
-    st.subheader("📊 리뷰 분석")
+    st.subheader("📋 자동 일정 생성기")
+    st.info("💡 리뷰 데이터 기반으로 최적의 일정을 자동 생성합니다!")
     
     if not st.session_state.reviews_loaded:
-        st.warning("⚠️ 리뷰 데이터를 로딩하는 중입니다...")
+        st.warning("⚠️ 리뷰 데이터를 먼저 로딩해주세요")
+    else:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            duration = st.selectbox("여행 기간", ["1박 2일", "2박 3일", "3박 4일"])
+            categories = st.multiselect(
+                "포함할 카테고리",
+                ['맛집 리뷰', '명소 리뷰', '카페 리뷰'],
+                default=['맛집 리뷰', '명소 리뷰', '카페 리뷰']
+            )
+        
+        with col2:
+            priority = st.radio(
+                "우선순위",
+                ["재방문율", "긍정 평가"],
+                help="어떤 기준으로 장소를 선택할지"
+            )
+        
+        if st.button("🎯 일정 생성", use_container_width=True):
+            with st.spinner("일정 생성 중..."):
+                itinerary = generate_itinerary(
+                    st.session_state.place_analysis,
+                    duration,
+                    categories,
+                    priority
+                )
+                
+                st.success("✅ 일정이 생성되었습니다!")
+                
+                for day_plan in itinerary['days']:
+                    st.markdown(f"### 📅 Day {day_plan['day']}")
+                    
+                    for activity in day_plan['activities']:
+                        with st.container():
+                            col1, col2, col3 = st.columns([1, 3, 2])
+                            
+                            with col1:
+                                st.write(f"**{activity['time']}**")
+                            
+                            with col2:
+                                st.write(f"**{activity['place']}**")
+                                st.caption(f"{activity['type']}")
+                            
+                            with col3:
+                                stats = activity['stats']
+                                st.write(f"재방문율: {stats['revisit_rate']:.0f}%")
+                                st.write(f"리뷰: {stats['total_reviews']}개")
+                    
+                    st.divider()
+                
+                # 다운로드
+                itinerary_text = f"# {duration} 강원도 여행 일정\n\n"
+                for day_plan in itinerary['days']:
+                    itinerary_text += f"## Day {day_plan['day']}\n\n"
+                    for activity in day_plan['activities']:
+                        itinerary_text += f"- {activity['time']} | {activity['place']} ({activity['type']})\n"
+                        itinerary_text += f"  재방문율: {activity['stats']['revisit_rate']:.0f}%, 리뷰: {activity['stats']['total_reviews']}개\n\n"
+                
+                st.download_button(
+                    "📥 일정표 다운로드",
+                    itinerary_text,
+                    file_name="강원도_여행_일정.txt",
+                    mime="text/plain",
+                    use_container_width=True
+                )
+
+# TAB 3: TOP 추천
+with tab3:
+    st.subheader("🏆 TOP 추천 장소")
+    
+    if not st.session_state.reviews_loaded:
+        st.warning("⚠️ 리뷰 데이터를 먼저 로딩해주세요")
+    else:
+        category_filter = st.selectbox(
+            "카테고리 선택",
+            ["전체"] + CATEGORIES
+        )
+        
+        sort_option = st.radio(
+            "정렬 기준",
+            ["재방문율", "긍정 평가", "리뷰 수"],
+            horizontal=True
+        )
+        
+        sort_map = {
+            "재방문율": "revisit_rate",
+            "긍정 평가": "positive_rate",
+            "리뷰 수": "total_reviews"
+        }
+        
+        category = None if category_filter == "전체" else category_filter
+        top_places = get_top_places(
+            st.session_state.place_analysis,
+            category,
+            sort_map[sort_option],
+            limit=20
+        )
+        
+        for idx, (place_name, stats) in enumerate(top_places, 1):
+            with st.container():
+                st.markdown(f"""
+                <div class='place-card'>
+                    <h4>{idx}. {place_name}</h4>
+                    <p><strong>{stats['category'].replace(' 리뷰', '')}</strong></p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("리뷰 수", f"{stats['total_reviews']}개")
+                with col2:
+                    st.metric("재방문율", f"{stats['revisit_rate']:.1f}%")
+                with col3:
+                    st.metric("긍정 평가", f"{stats['positive_rate']:.1f}%")
+                with col4:
+                    st.metric("재방문", f"{stats['revisit_count']}명")
+                
+                if stats['recent_reviews']:
+                    with st.expander("최근 리뷰 보기"):
+                        for review in stats['recent_reviews'][:2]:
+                            st.write(f"• {review['content'][:100]}...")
+
+# TAB 4: 비교 분석
+with tab4:
+    st.subheader("📊 장소 비교 분석")
+    
+    if not st.session_state.reviews_loaded:
+        st.warning("⚠️ 리뷰 데이터를 먼저 로딩해주세요")
+    else:
+        all_places = list(st.session_state.place_analysis.keys())
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            place1 = st.selectbox("장소 1", all_places, key="place1")
+        with col2:
+            place2 = st.selectbox("장소 2", all_places, key="place2", index=min(1, len(all_places)-1))
+        
+        if st.button("⚖️ 비교하기", use_container_width=True):
+            stats1 = st.session_state.place_analysis[place1]
+            stats2 = st.session_state.place_analysis[place2]
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown(f"### {place1}")
+                st.write(f"**카테고리**: {stats1['category']}")
+                st.metric("총 리뷰", f"{stats1['total_reviews']}개")
+                st.metric("재방문율", f"{stats1['revisit_rate']:.1f}%")
+                st.metric("긍정 평가", f"{stats1['positive_rate']:.1f}%")
+            
+            with col2:
+                st.markdown(f"### {place2}")
+                st.write(f"**카테고리**: {stats2['category']}")
+                st.metric("총 리뷰", f"{stats2['total_reviews']}개")
+                st.metric("재방문율", f"{stats2['revisit_rate']:.1f}%")
+                st.metric("긍정 평가", f"{stats2['positive_rate']:.1f}%")
+            
+            st.divider()
+            
+            # 승자 판정
+            scores = {place1: 0, place2: 0}
+            
+            if stats1['revisit_rate'] > stats2['revisit_rate']:
+                scores[place1] += 1
+            else:
+                scores[place2] += 1
+            
+            if stats1['positive_rate'] > stats2['positive_rate']:
+                scores[place1] += 1
+            else:
+                scores[place2] += 1
+            
+            if stats1['total_reviews'] > stats2['total_reviews']:
+                scores[place1] += 1
+            else:
+                scores[place2] += 1
+            
+            winner = place1 if scores[place1] > scores[place2] else place2
+            st.success(f"🏆 종합 우승: **{winner}** ({scores[winner]}:{ scores[place1 if winner == place2 else place2]})")
+
+# TAB 5: 리뷰 통계
+with tab5:
+    st.subheader("⭐ 리뷰 통계 대시보드")
+    
+    if not st.session_state.reviews_loaded:
+        st.warning("⚠️ 리뷰 데이터를 먼저 로딩해주세요")
     else:
         # 전체 통계
-        total_reviews = st.session_state.total_reviews
-        total_places = sum(len(set(r['place_name'] for r in reviews)) 
-                          for reviews in st.session_state.reviews_data.values())
+        total_reviews = sum(len(r) for r in st.session_state.reviews_data.values())
+        total_places = len(st.session_state.place_analysis)
+        total_revisits = sum(p['revisit_count'] for p in st.session_state.place_analysis.values())
         
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -470,76 +753,29 @@ with tab2:
         with col2:
             st.metric("총 장소", f"{total_places}곳")
         with col3:
-            st.metric("카테고리", f"{len(CATEGORIES)}개")
+            st.metric("재방문 리뷰", f"{total_revisits:,}개")
         
         st.divider()
         
-        # 카테고리 선택
-        category_choice = st.selectbox(
-            "카테고리 선택",
-            list(st.session_state.reviews_data.keys())
-        )
+        # 카테고리별 통계
+        st.markdown("### 📈 카테고리별 통계")
         
-        category_reviews = st.session_state.reviews_data[category_choice]
-        
-        if not category_reviews:
-            st.info("해당 카테고리에 리뷰 데이터가 없습니다.")
-        else:
-            # 장소별 통계 계산
-            place_stats = {}
-            for review in category_reviews:
-                place_name = review['place_name']
-                if place_name not in place_stats:
-                    place_stats[place_name] = {
-                        'total': 0,
-                        'revisit': 0,
-                        'recent_reviews': []
-                    }
-                place_stats[place_name]['total'] += 1
-                if '재방문' in review.get('revisit', '') or '번째' in review.get('revisit', ''):
-                    place_stats[place_name]['revisit'] += 1
-                place_stats[place_name]['recent_reviews'].append(review)
-            
-            # 재방문율 계산 및 정렬
-            for place_name, stats in place_stats.items():
-                stats['revisit_rate'] = (stats['revisit'] / stats['total'] * 100) if stats['total'] > 0 else 0
-            
-            sorted_places = sorted(place_stats.items(), 
-                                 key=lambda x: (x[1]['revisit_rate'], x[1]['total']), 
-                                 reverse=True)
-            
-            # 카테고리 통계
-            st.markdown(f"### 📊 {category_choice} 통계")
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("장소 수", f"{len(sorted_places)}곳")
-            with col2:
-                st.metric("리뷰 수", f"{len(category_reviews):,}개")
-            
-            st.divider()
-            
-            # TOP 10 장소 (재방문율 순)
-            st.markdown("### 🏆 재방문율 높은 TOP 10")
-            
-            for idx, (place_name, stats) in enumerate(sorted_places[:10], 1):
-                with st.expander(
-                    f"{idx}. {place_name} - 재방문율 {stats['revisit_rate']:.1f}% (리뷰 {stats['total']}개)"
-                ):
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("총 리뷰", f"{stats['total']}개")
-                    with col2:
-                        st.metric("재방문 리뷰", f"{stats['revisit']}개")
-                    with col3:
-                        st.metric("재방문율", f"{stats['revisit_rate']:.1f}%")
+        for category in CATEGORIES:
+            if category in st.session_state.reviews_data:
+                reviews = st.session_state.reviews_data[category]
+                category_places = [p for p in st.session_state.place_analysis.values() 
+                                  if p['category'] == category]
+                
+                if category_places:
+                    avg_revisit = sum(p['revisit_rate'] for p in category_places) / len(category_places)
+                    avg_positive = sum(p['positive_rate'] for p in category_places) / len(category_places)
                     
-                    # 최근 리뷰 3개
-                    st.markdown("**최근 리뷰:**")
-                    for review in stats['recent_reviews'][:3]:
-                        content = review.get('content', '')[:150]
-                        revisit_info = f" ({review.get('revisit', '')})" if review.get('revisit') else ""
-                        st.write(f"• `{review.get('date', '')}` {review.get('nickname', '익명')}{revisit_info}")
-                        st.caption(f"{content}...")
+                    with st.expander(f"{category} ({len(reviews)}개 리뷰, {len(category_places)}개 장소)"):
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.metric("평균 재방문율", f"{avg_revisit:.1f}%")
+                        with col2:
+                            st.metric("평균 긍정 평가", f"{avg_positive:.1f}%")
 
 # ============================================
 # 푸터
@@ -548,8 +784,8 @@ with tab2:
 st.divider()
 st.markdown("""
 <div style='text-align: center; padding: 20px; background-color: #f8f9fa; border-radius: 10px;'>
-    <h4>🎯 네이버 리뷰 기반 AI 컨시어지</h4>
-    <p>✅ 실제 방문객 리뷰 분석 | ✅ Streamlit Cloud 최적화 | ✅ 빠른 응답</p>
-    <p style='color: gray; margin-top: 10px;'>강원대학교 학생창의자율과제 7팀 | Powered by LangChain & OpenAI</p>
+    <h4>🎯 설문 기반 실용 기능</h4>
+    <p>✅ 리뷰 기반 추천 | ✅ 자동 일정 생성 | ✅ 장소 비교 | ✅ TOP 순위 | ✅ 통계 분석</p>
+    <p style='color: gray; margin-top: 10px;'>강원대학교 학생창의자율과제 7팀</p>
 </div>
 """, unsafe_allow_html=True)
