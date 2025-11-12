@@ -117,7 +117,7 @@
 
 ### Core
 - **Frontend**: Streamlit 1.30+
-- **AI Model**: OpenAI GPT-3.5-turbo / GPT-4o-mini
+- **AI Model**: OpenAI GPT-4o-mini / GPT-5-nano
 - **Framework**: LangChain 0.1+
 - **Vector DB**: ChromaDB
 - **Embeddings**: OpenAI Embeddings
@@ -272,7 +272,7 @@ Excel 파일 (naver_review_[장소명].xlsx)
 
 ### 기술 지원
 - **Anthropic**: Claude 3.5 Sonnet
-- **OpenAI**: GPT-3.5-turbo, GPT-4o
+- **OpenAI**: GPT-4o-mini, GPT-5-nano
 - **Streamlit**: Community Cloud
 
 ---
