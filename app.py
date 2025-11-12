@@ -640,7 +640,7 @@ with tab1:
 **모델 오류**
 - 사용 중인 모델: {model_choice}
 - OpenAI API 키가 맞는지 확인하세요
-- 사이드바에서 다른 모델 시도: gpt-3.5-turbo (권장)
+- 사이드바에서 다른 모델 시도: gpt-4o-mini (권장)
                         """)
                     elif "api key" in error_msg.lower():
                         st.error("""
@@ -657,7 +657,7 @@ with tab1:
                         """)
                     else:
                         st.error(f"상세 오류: {error_msg}")
-                        st.caption("💡 gpt-3.5-turbo 모델로 변경해보세요 (사이드바)")
+                        st.caption("💡 gpt-4o-mini 모델로 변경해보세요 (사이드바)")
 
 # TAB 2: 일정 생성기
 with tab2:
