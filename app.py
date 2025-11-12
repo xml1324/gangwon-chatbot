@@ -512,7 +512,7 @@ with st.sidebar:
     st.subheader("🤖 AI 설정")
     model_choice = st.selectbox(
         "모델", 
-        ["gpt-4o-mini", "gpt-5-nano", "gpt-5-mini"],
+        ["gpt-4o-mini", "gpt-5-nano"],
         index=0
     )
     temperature = st.slider("창의성", 0.0, 1.0, 0.7, 0.1)
