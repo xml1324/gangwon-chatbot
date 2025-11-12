@@ -65,8 +65,8 @@
 
 ```bash
 # 1. 레포지토리 클론
-git clone https://github.com/your-username/gangwon-chatbot.git
-cd gangwon-tourism-chatbot
+git clone https://github.com/xml1324/gangwon-chatbot.git
+cd gangwon-chatbot
 
 # 2. 패키지 설치
 pip install -r requirements.txt
